@@ -1,0 +1,39 @@
+//######################################################################
+// Module: imemory (Bộ nhớ Lệnh - 8KiB, Chỉ đọc)
+// - Yêu cầu: 8KiB, Đọc không đồng bộ (Asynchronous Read).
+// - Nạp dữ liệu từ file .hex bằng $readmemh.
+// - Không cần clk/reset vì là logic tổ hợp (ROM).
+//######################################################################
+module imem (
+    // Địa chỉ word 11-bit (ví dụ: từ PC[12:2])
+    // 2^11 = 2048 words. 2048 * 4 bytes/word = 8192 bytes = 8KiB.
+    input  logic [10:0]  i_word_addr,
+
+    // Dữ liệu đọc ra (lệnh 32-bit)
+    output logic [31:0]  o_instr
+);
+
+    // Mảng lưu trữ 8KiB (2048 words x 32 bits)
+    logic [31:0] mem_array [0:2047];
+
+    
+    // Khởi tạo Bộ nhớ (Dùng $readmemh)
+    //------------------------------------------------------------------
+    // Khối 'initial' chỉ chạy 1 lần khi mô phỏng bắt đầu.
+    // Nó không được tổng hợp thành phần cứng, nhưng sẽ được
+    // công cụ tổng hợp (Quartus) nhận diện để khởi tạo ROM.
+    initial begin
+             $readmemh("isa_4b.hex", mem_array);
+    end
+//------------------------------------------------------------------
+    // Logic Đọc (Asynchronous Read)
+    //------------------------------------------------------------------
+//------------------------------------------------------------------
+    // Dùng 'assign' để tạo logic tổ hợp (combinational), hoạt động tức thì.
+    // Nó hoạt động như một bộ MUX 2048-chọn-1 khổng lồ.
+    // Địa chỉ vào là địa chỉ word (11 bit) nên truy cập mảng trực tiếp.
+    assign o_instr = mem_array[i_word_addr];
+
+    
+
+endmodule 
