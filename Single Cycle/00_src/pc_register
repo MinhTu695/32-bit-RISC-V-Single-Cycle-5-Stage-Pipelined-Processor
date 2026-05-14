@@ -1,0 +1,18 @@
+//######################################################################
+// Module: pc_register (Thanh ghi PC)
+//######################################################################
+module pc_register (
+    input  logic        i_clk,
+    input  logic        i_reset,    // Active-low reset
+    input  logic [31:0] i_pc_next,  // Giá trị PC tiếp theo từ MUX
+    output logic [31:0] o_pc        // Giá trị PC hiện tại
+);
+
+    always_ff @(posedge i_clk, negedge i_reset) begin
+        if (!i_reset)
+            o_pc <= 32'h0000_0000; // Reset PC về 0
+        else
+            o_pc <= i_pc_next; // Chốt giá trị mới
+    end
+
+endmodule 
