@@ -1,0 +1,216 @@
+//----------------------------------------------------------------------//
+//  Design Note
+//----------------------------------------------------------------------//
+//  1. Instruction Memory Depth (IMEM): At least 8 kB to run the "isa_1b.hex" or "isa_4b.hex"
+//  2. Data        Memory Depth (DMEM): At least 2 kB (0x0000_0000 - 0x0000_07FF)
+//  3. IMEM and DMEM are separate memory blocks (Harvard-like structure).
+
+
+module single_cycle (
+    input  logic         i_clk      ,
+    input  logic         i_reset    ,
+    input  logic [31:0]  i_io_sw    ,
+    output logic [31:0]  o_io_ledr ,
+    output logic [31:0]  o_io_ledg ,
+    output logic [31:0]  o_io_lcd  ,
+    output logic [ 6:0]  o_io_hex0 ,
+    output logic [ 6:0]  o_io_hex1 ,
+    output logic [ 6:0]  o_io_hex2 ,
+    output logic [ 6:0]  o_io_hex3 ,
+    output logic [ 6:0]  o_io_hex4 ,
+    output logic [ 6:0]  o_io_hex5 ,
+    output logic [ 6:0]  o_io_hex6 ,
+    output logic [ 6:0]  o_io_hex7 ,
+    output logic [31:0]  o_pc_debug,
+    output logic         o_insn_vld
+);
+//============================================================
+    // 1. KHAI BÁO DÂY (WIRES)
+    // Khai báo tất cả các dây trung gian trong Sơ đồ 1
+    //============================================================
+    
+    // Tín hiệu Lệnh & PC
+    logic [31:0] pc_next;     // Đầu vào của thanh ghi PC
+    logic [31:0] pc;          // Đầu ra của thanh ghi PC
+    logic [31:0] pc_four;     // Kết quả từ khối +4
+    logic [31:0] instr;       // Lệnh 32-bit từ I-Mem
+    logic [10:0] word_addr;   // Dây 11-bit cho IMEM (PC[12:2])
+
+    // Tín hiệu từ Regfile
+    logic [31:0] rs1_data;    // Dữ liệu đọc từ rs1
+    logic [31:0] rs2_data;    // Dữ liệu đọc từ rs2
+    logic [31:0] wb_data;     // Dữ liệu ghi ngược (Write-Back)
+
+    // Tín hiệu từ ImmGen
+    logic [31:0] imm_data;    // Số tức thời 32-bit đã mở rộng dấu
+
+    // Tín hiệu ALU
+    logic [31:0] operand_a;   // Toán hạng A
+    logic [31:0] operand_b;   // Toán hạng B
+    logic [31:0] alu_data;    // Kết quả 32-bit từ ALU
+
+    // Tín hiệu Memory
+    logic [31:0] ld_data;     // Dữ liệu đọc từ LSU (Load Data)
+    
+    // Tín hiệu Điều khiển (Từ Control Unit)
+    logic        pc_sel;      // 1=Chọn ALU (Branch/JAL), 0=Chọn PC+4
+    logic        rd_wren;     // 1=Cho phép ghi Regfile
+    logic        br_un;       // 1=So sánh không dấu (cho BRC)
+    logic        opa_sel;     // 1=Chọn PC, 0=Chọn rs1_data
+    logic        opb_sel;     // 1=Chọn imm_data, 0=Chọn rs2_data
+    logic        mem_wren;    // 1=Cho phép ghi LSU (Store)
+    logic [1:0]  wb_sel;      // Tín hiệu chọn cho MUX Ghi ngược
+    logic [2:0]  imm_sel;     // Tín hiệu chọn loại immediate (cho ImmGen)
+    logic [2:0]  mem_funct3;  // Tín hiệu funct3 cho LSU (SB, SH, SW)
+    logic [3:0]  alu_op;      // Tín hiệu điều khiển phép toán ALU
+
+    // Tín hiệu Trạng thái (Từ BRC -> Control Unit)
+    logic        br_less;
+    logic        br_equal;
+
+
+    //============================================================
+    // 2. KHỞI TẠO CÁC KHỐI MODULE (INSTANTIATION)
+    //============================================================
+
+    // --- 1. Khối PC (Program Counter Register) ---
+    pc_register u_pc_reg (
+        .i_clk     (i_clk),
+        .i_reset   (i_reset),
+        .i_pc_next (pc_next), 
+        .o_pc      (pc)       
+    );
+
+    // --- 2. Khối PC + 4 ---
+    add_4 u_add_4 (
+        .i_pc      (pc),
+        .o_pc_four (pc_four)
+    );
+
+    // --- 3. MUX Chọn PC ---
+    mux_pc u_mux_pc (
+        .i_pc_four  (pc_four),   
+        .i_alu_data (alu_data),  
+        .i_pc_sel   (pc_sel),    
+        .o_pc_next  (pc_next)    
+    );
+
+    // --- 4. Bộ nhớ Lệnh (Instruction Memory / I$) ---
+    assign word_addr = pc[12:2]; // Nối 11 bit từ PC
+
+    imem u_imem (
+        .i_word_addr (word_addr), 
+        .o_instr     (instr)
+    );
+
+    // --- 5. Khối Regfile (Tập thanh ghi) ---
+    regfile u_regfile (
+        .i_clk       (i_clk),
+        .i_reset     (i_reset),
+        .i_rd_wren   (rd_wren),
+        .i_rs1_addr  (instr[19:15]), 
+        .i_rs2_addr  (instr[24:20]), 
+        .i_rd_addr   (instr[11:7]),  
+        .i_rd_data   (wb_data),      
+        .o_rs1_data  (rs1_data),
+        .o_rs2_data  (rs2_data)
+    );
+
+    // --- 6. Khối Sinh Số Tức thời (ImmGen) ---
+    imm_gen u_imm_gen (
+        .i_instr      (instr),
+        .i_instr_type (imm_sel), 
+        .o_imm_data   (imm_data)
+    );
+
+    // --- 7. Khối So sánh Nhánh (BRC) ---
+    brc u_brc (
+        .i_rs1_data (rs1_data),
+        .i_rs2_data (rs2_data),
+        .i_br_un    (br_un),     
+        .o_br_less  (br_less),   
+        .o_br_equal (br_equal)   
+    );
+
+    // --- 8. Khối Điều khiển (Control Unit) ---
+    // (*** ĐÃ SỬA LẠI KHỐI NÀY ĐỂ KHỚP VỚI CU MỚI ***)
+    control_unit u_control_unit (
+        .i_inst       (instr),    // Nối 32-bit instruction
+        .i_BrLT       (br_less),  // Nối cờ BrLT
+        .i_BrEq       (br_equal), // Nối cờ BrEq
+        
+        // Tất cả các ngõ ra (outputs) giữ nguyên
+        .o_pc_sel     (pc_sel),
+        .o_instr_type (imm_sel),
+        .o_br_un      (br_un),
+        .o_opa_sel    (opa_sel),
+        .o_opb_sel    (opb_sel),
+        .o_alu_op     (alu_op),
+        .o_mem_wren   (mem_wren),
+        .o_rd_wren    (rd_wren),
+        .o_wb_sel     (wb_sel),
+        .o_mem_funct3 (mem_funct3),
+        .o_insn_vld   (o_insn_vld)
+    );
+
+    // --- 9. MUX Toán hạng A (chọn PC hoặc rs1_data) ---
+    mux_operand_a u_muxa (
+        .i_pc        (pc),
+        .i_rs1_data  (rs1_data),
+        .i_opa_sel   (opa_sel),
+        .o_operand_a (operand_a)
+    );
+
+    // --- 10. MUX Toán hạng B (chọn rs2_data hoặc imm_data) ---
+    mux_operand_b u_muxb (
+        .i_rs2_data  (rs2_data),
+        .i_imm       (imm_data),
+        .i_opb_sel   (opb_sel),
+        .o_operand_b (operand_b)
+    );
+
+    // --- 11. Khối ALU ---
+    alu u_alu (
+        .i_op_a     (operand_a),
+        .i_op_b     (operand_b),
+        .i_alu_op   (alu_op),
+        .o_alu_data (alu_data)
+    );
+
+    // --- 12. Khối LSU (Load-Store Unit & Data Memory) ---
+    lsu u_lsu (
+        .i_clk        (i_clk),
+        .i_reset      (i_reset),
+        .i_lsu_addr   (alu_data), // Nối 32-bit ALU data
+        .i_st_data    (rs2_data), // Nối rs2_data cho lệnh Store       
+        .i_lsu_wren   (mem_wren),       
+        .i_mem_funct3 (mem_funct3),      
+        .o_ld_data    (ld_data),        
+        
+        .o_io_ledr    (o_io_ledr),
+        .o_io_ledg    (o_io_ledg),
+        .o_io_hex0    (o_io_hex0),
+        .o_io_hex1    (o_io_hex1),
+        .o_io_hex2    (o_io_hex2),
+        .o_io_hex3    (o_io_hex3),
+        .o_io_hex4    (o_io_hex4),
+        .o_io_hex5    (o_io_hex5),
+        .o_io_hex6    (o_io_hex6),
+        .o_io_hex7    (o_io_hex7),
+        .o_io_lcd     (o_io_lcd),
+        .i_io_sw      (i_io_sw)
+    );
+
+    // --- 13. MUX Ghi ngược (Write-Back) ---
+    mux_wb u_mux_wb (
+        .i_alu_data (alu_data),  
+        .i_ld_data  (ld_data),   
+        .i_pc_four  (pc_four),   
+        .i_wb_sel   (wb_sel),    
+        .o_wb_data  (wb_data)    
+    );
+
+    // --- 14. Cổng Output Debug ---
+    assign o_pc_debug = pc;
+
+endmodule : single_cycle
