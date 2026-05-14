@@ -1,0 +1,701 @@
+//######################################################################
+// MODULE ĐỈNH: lsu (Load-Store Unit)
+//######################################################################
+module lsu (
+     input  logic        i_clk,
+     input  logic        i_reset,
+     input  logic [31:0] i_lsu_addr,
+     input  logic [31:0] i_st_data,
+     input  logic        i_lsu_wren,
+     input  logic [2:0]  i_mem_funct3,
+     output logic [31:0] o_ld_data,
+     output logic [31:0] o_io_ledr,
+     output logic [31:0] o_io_ledg,
+     output logic [6:0]  o_io_hex0,
+     output logic [6:0]  o_io_hex1,
+     output logic [6:0]  o_io_hex2,
+     output logic [6:0]  o_io_hex3,
+     output logic [6:0]  o_io_hex4,
+     output logic [6:0]  o_io_hex5,
+     output logic [6:0]  o_io_hex6,
+     output logic [6:0]  o_io_hex7, 
+     output logic [31:0] o_io_lcd,
+     input  logic [31:0] i_io_sw
+);
+
+    // Tín hiệu nội bộ trong module
+    logic mem_sel, ledr_sel, ledg_sel, hex03_sel, hex47_sel, lcd_sel, sw_sel;
+    logic [31:0] mem_rdata_raw, mem_data_processed, sw_data_from_buffer;
+    logic [31:0] ledr_data_readback, ledg_data_readback, hex03_data_readback, hex47_data_readback, lcd_data_readback;
+    logic mem_wren;
+    logic [10:0] mem_addr;
+    logic [3:0]  mem_bmask;
+
+    logic [31:0] wdata_to_mem; // Dữ liệu đã dịch (shifter) để ghi vào D$
+    logic is_sb, is_sh, is_sw;   // Tín hiệu điều khiển từ store preprocessor
+    
+    //============================================================
+    // KHỞI TẠO 7 KHỐI CON
+    //============================================================
+
+    // 1. KHỐI DECODER (MUX bên trái)
+    lsu_decoder u_decoder (
+         .i_lsu_addr (i_lsu_addr),
+         .o_mem_sel  (mem_sel),   
+			.o_ledr_sel (ledr_sel), 
+			.o_ledg_sel (ledg_sel),
+         .o_hex03_sel(hex03_sel), 
+			.o_hex47_sel(hex47_sel),
+			.o_lcd_sel  (lcd_sel),
+         .o_sw_sel   (sw_sel)
+    );
+
+    // 2. KHỐI OUTPUT BUFFER (Ghi ra LED/LCD)
+    lsu_output_buffer u_output_buffer (
+         .i_clk       (i_clk),         
+			.i_reset     (i_reset),
+         .i_lsu_wren  (i_lsu_wren),    
+			.i_st_data   (i_st_data),
+         .i_mem_funct3(i_mem_funct3),  
+			.i_addr_bits (i_lsu_addr[1:0]),
+         .i_ledr_sel  (ledr_sel),      
+			.i_ledg_sel  (ledg_sel),
+         .i_hex03_sel (hex03_sel),     
+			.i_hex47_sel (hex47_sel),
+         .i_lcd_sel   (lcd_sel),
+         .o_io_ledr  (o_io_ledr),   
+			.o_io_ledg  (o_io_ledg),
+         .o_io_hex0 (o_io_hex0),
+         .o_io_hex1 (o_io_hex1),
+         .o_io_hex2 (o_io_hex2),
+         .o_io_hex3 (o_io_hex3),
+         .o_io_hex4 (o_io_hex4),
+         .o_io_hex5 (o_io_hex5),
+         .o_io_hex6 (o_io_hex6),
+         .o_io_hex7 (o_io_hex7),    
+			.o_io_lcd   (o_io_lcd),
+         .o_ledr_data  (ledr_data_readback),
+         .o_ledg_data  (ledg_data_readback),
+         .o_hex03_data (hex03_data_readback),
+         .o_hex47_data (hex47_data_readback),
+         .o_lcd_data   (lcd_data_readback)
+    );
+    
+    // 3. KHỐI INPUT BUFFER (Đọc từ SW)
+    lsu_input_buffer u_input_buffer (
+         .i_io_sw   (i_io_sw),
+         .o_sw_data (sw_data_from_buffer)
+    );
+    
+    // 4. KHỐI D$ (MEMORY) VÀ LOGIC GHI (STORE)
+    
+    // 4a. KHỐI TIỀN XỬ LÝ STORE (Tạo mem_bmask)
+    lsu_store_preprocessor u_store_preproc (
+        .i_lsu_wren   (i_lsu_wren),
+        .i_mem_funct3 (i_mem_funct3),
+        .i_addr_bits  (i_lsu_addr[1:0]),
+        .o_mem_bmask  (mem_bmask),
+	.o_is_sb      (is_sb),
+        .o_is_sh      (is_sh),
+        .o_is_sw      (is_sw)
+    );
+    
+    // 4b. Khởi tạo D$ (Memory)
+    assign mem_addr = i_lsu_addr[10:0]; 
+    assign mem_wren = mem_sel & i_lsu_wren;
+// 4b. LOGIC STORE DATA SHIFTER (Tạo wdata_to_mem) [ĐÃ SỬA LỖI]
+always_comb begin
+    // Mặc định (cho SW hoặc khi không store)
+    // Dùng 0 thay vì X để tránh lỗi lan truyền (X-propagation)
+    // Byte mask sẽ kiểm soát việc ghi, nên các bit rác là 0 sẽ an toàn.
+    wdata_to_mem = i_st_data; 
+    
+    if (is_sb) begin // Store Byte
+        // Dịch byte thấp nhất [7:0] đến đúng byte lane
+        case (i_lsu_addr[1:0])
+            2'b00:  wdata_to_mem = {24'h0, i_st_data[7:0]};
+            2'b01:  wdata_to_mem = {16'h0, i_st_data[7:0], 8'h0};
+            2'b10:  wdata_to_mem = {8'h0,  i_st_data[7:0], 16'h0};
+            2'b11:  wdata_to_mem = {       i_st_data[7:0], 24'h0};
+            default: wdata_to_mem = {24'h0, i_st_data[7:0]}; 
+        endcase
+    end else if (is_sh) begin // Store Half-word
+         // Dịch half-word [15:0] đến đúng half-word lane
+         // Lỗi của bạn nằm ở đây. Phải case trên bit 1.
+         case (i_lsu_addr[1]) // CHỈ DÙNG BIT 1
+            1'b0:   wdata_to_mem = {16'h0, i_st_data[15:0]}; // Địa chỉ ...00 và ...01
+            1'b1:   wdata_to_mem = {i_st_data[15:0], 16'h0}; // Địa chỉ ...10 và ...11
+         endcase
+    end
+end
+    memory mem_inst (
+         .i_clk   (i_clk),   
+			.i_reset (i_reset), 
+			.i_addr  (mem_addr),
+         .i_wdata (wdata_to_mem), 
+			.i_bmask (mem_bmask), 
+			.i_wren  (mem_wren),
+         .o_rdata (mem_rdata_raw) 
+    );
+
+    // 5. KHỐI LOAD PROCESSOR (Hậu xử lý D$)
+    lsu_load_processor u_load_processor (
+         .i_raw_mem_data     (mem_rdata_raw),
+         .i_lsu_addr_bits  (i_lsu_addr[1:0]),
+         .i_mem_funct3     (i_mem_funct3),
+         .o_processed_mem_data (mem_data_processed)
+    );
+
+    // 6. KHỐI MUX ĐỌC (MUX bên phải)
+    lsu_read_mux u_read_mux (
+         .i_mem_sel    (mem_sel),
+         .i_sw_sel     (sw_sel),
+         .i_ledr_sel   (ledr_sel),
+         .i_ledg_sel   (ledg_sel),
+         .i_hex03_sel  (hex03_sel),
+         .i_hex47_sel  (hex47_sel),
+         .i_lcd_sel    (lcd_sel),
+         .i_processed_mem_data (mem_data_processed),
+         .i_raw_mem_data       (mem_rdata_raw),
+         .i_sw_data            (sw_data_from_buffer),
+         .i_ledr_readback      (ledr_data_readback),
+         .i_ledg_readback      (ledg_data_readback),
+         .i_hex03_readback     (hex03_data_readback),
+         .i_hex47_readback     (hex47_data_readback),
+         .i_lcd_readback       (lcd_data_readback),
+         .o_ld_data            (o_ld_data)
+    );
+
+endmodule
+//######################################################################
+// Module: memory (D$)
+//######################################################################
+module memory (
+    input  logic        i_clk,
+    input  logic        i_reset,      // Active-low reset
+    input  logic [10:0] i_addr,
+    input  logic [31:0] i_wdata,
+    input  logic [3:0]  i_bmask,
+    input  logic        i_wren,
+    output logic [31:0] o_rdata
+);
+    logic [31:0] mem_array [0:511];
+    assign o_rdata = mem_array[i_addr[10:2]];
+    initial begin
+        for (int i = 0; i < 512; i++) begin
+            mem_array[i] = 32'b0;
+        end
+    end
+    always_ff @(posedge i_clk, negedge i_reset) begin
+        if (i_reset == 0) begin
+            for (int i = 0; i < 512; i++) begin
+                mem_array[i] <= 32'b0;
+            end
+        end else if (i_wren) begin 
+            logic [8:0] word_addr;
+            word_addr = i_addr[10:2];
+            if (i_bmask[0]) mem_array[word_addr][7:0]   <= i_wdata[7:0];
+            if (i_bmask[1]) mem_array[word_addr][15:8]  <= i_wdata[15:8];
+            if (i_bmask[2]) mem_array[word_addr][23:16] <= i_wdata[23:16];
+            if (i_bmask[3]) mem_array[word_addr][31:24] <= i_wdata[31:24];
+        end
+    end
+endmodule 
+
+//######################################################################
+// HELPER MODULE 1: decoder_2to4
+//######################################################################
+module decoder_2to4 (
+    input  logic [1:0] i_sel,
+    input  logic       i_en,
+    output logic [3:0] o_decoded
+);
+    logic [1:0] sel_n;
+    assign sel_n = ~i_sel;
+    assign o_decoded[0] = i_en & sel_n[1] & sel_n[0]; // 00
+    assign o_decoded[1] = i_en & sel_n[1] & i_sel[0]; // 01
+    assign o_decoded[2] = i_en & i_sel[1] & sel_n[0]; // 10
+    assign o_decoded[3] = i_en & i_sel[1] & i_sel[0]; // 11
+endmodule
+
+//######################################################################
+// HELPER MODULE 2: mux2to1_Nbit (Tham số hóa)
+//######################################################################
+module mux2to1_Nbit #(
+    parameter WIDTH = 16 // Giá trị mặc định
+)(
+    input  logic [WIDTH-1:0] i_in0,
+    input  logic [WIDTH-1:0] i_in1,
+    input  logic             i_sel,
+    output logic [WIDTH-1:0] o_y
+);
+    logic sel_n;
+    logic [WIDTH-1:0] anded_0, anded_1;
+    assign sel_n = ~i_sel;
+    assign anded_0 = i_in0 & {WIDTH{sel_n}};
+    assign anded_1 = i_in1 & {WIDTH{i_sel}};
+    assign o_y = anded_0 | anded_1;
+endmodule
+
+//######################################################################
+// HELPER MODULE 3: mux4to1_Nbit (Tham số hóa)
+//######################################################################
+module mux4to1_Nbit #(
+    parameter WIDTH = 8 // Giá trị mặc định
+)(
+    input  logic [WIDTH-1:0] i_in0, i_in1, i_in2, i_in3,
+    input  logic [1:0]       i_sel,
+    output logic [WIDTH-1:0] o_y
+);
+    logic [3:0] decoded_sel;
+    decoder_2to4 u_dec (
+        .i_sel    (i_sel),
+        .i_en     (1'b1),
+        .o_decoded(decoded_sel)
+    );
+    
+    logic [WIDTH-1:0] anded_buses [3:0];
+    assign anded_buses[0] = i_in0 & {WIDTH{decoded_sel[0]}};
+    assign anded_buses[1] = i_in1 & {WIDTH{decoded_sel[1]}};
+    assign anded_buses[2] = i_in2 & {WIDTH{decoded_sel[2]}};
+    assign anded_buses[3] = i_in3 & {WIDTH{decoded_sel[3]}};
+    
+    assign o_y = anded_buses[0] | anded_buses[1] | anded_buses[2] | anded_buses[3];
+endmodule
+
+//######################################################################
+// HELPER MODULE 4: decoder_3to5 (Giải mã funct3 Load)
+//######################################################################
+module decoder_3to5_lsu (
+    input  logic [2:0] i_sel, // i_mem_funct3
+    input  logic       i_en,
+    output logic [4:0] o_decoded // [0]=is_lb, [1]=is_lh, [2]=is_lw, [3]=is_lbu, [4]=is_lhu
+);
+    logic [2:0] sel_n;
+    assign sel_n = ~i_sel;
+    assign o_decoded[0] = i_en & sel_n[2] & sel_n[1] & sel_n[0]; // 000
+    assign o_decoded[1] = i_en & sel_n[2] & sel_n[1] & i_sel[0]; // 001
+    assign o_decoded[2] = i_en & sel_n[2] & i_sel[1] & sel_n[0]; // 010
+    assign o_decoded[3] = i_en & i_sel[2] & sel_n[1] & sel_n[0]; // 100
+    assign o_decoded[4] = i_en & i_sel[2] & sel_n[1] & i_sel[0]; // 101
+endmodule
+
+//######################################################################
+// HELPER MODULE 5: mux5to1_32bit_funct3 (MUX 5-to-1 dùng funct3)
+//######################################################################
+module mux5to1_32bit_funct3 (
+    input  logic [31:0] i_in0, // lb_data
+    input  logic [31:0] i_in1, // lh_data
+    input  logic [31:0] i_in2, // lw_data
+    input  logic [31:0] i_in3, // lbu_data
+    input  logic [31:0] i_in4, // lhu_data
+    input  logic [2:0]  i_sel, // Tín hiệu 3-bit funct3
+    output logic [31:0] o_y
+);
+    logic [4:0]  decoded_sel;
+
+    // 1. Giải mã 3-bit funct3 thành 5-bit one-hot
+    decoder_3to5_lsu u_dec_internal (
+        .i_sel    (i_sel),
+        .i_en     (1'b1), // Luôn bật
+        .o_decoded(decoded_sel)
+    );
+
+    // 2. Logic AND-OR
+    logic [31:0] anded_buses [4:0];
+    assign anded_buses[0] = i_in0 & {32{decoded_sel[0]}};
+    assign anded_buses[1] = i_in1 & {32{decoded_sel[1]}};
+    assign anded_buses[2] = i_in2 & {32{decoded_sel[2]}};
+    assign anded_buses[3] = i_in3 & {32{decoded_sel[3]}};
+    assign anded_buses[4] = i_in4 & {32{decoded_sel[4]}};
+    
+    assign o_y = anded_buses[0] | anded_buses[1] | anded_buses[2] | 
+                 anded_buses[3] | anded_buses[4];
+endmodule
+
+//######################################################################
+// HELPER MODULE 6: mux7to1_32bit (MUX one-hot)
+//######################################################################
+module mux7to1_32bit (
+    input  logic [31:0] i_in0, i_in1, i_in2, i_in3, i_in4, i_in5, i_in6,
+    input  logic        i_sel0, i_sel1, i_sel2, i_sel3, i_sel4, i_sel5, i_sel6,
+    output logic [31:0] o_y
+);
+    logic [31:0] anded_buses [6:0];
+    assign anded_buses[0] = i_in0 & {32{i_sel0}};
+    assign anded_buses[1] = i_in1 & {32{i_sel1}};
+    assign anded_buses[2] = i_in2 & {32{i_sel2}};
+    assign anded_buses[3] = i_in3 & {32{i_sel3}};
+    assign anded_buses[4] = i_in4 & {32{i_sel4}};
+    assign anded_buses[5] = i_in5 & {32{i_sel5}};
+    assign anded_buses[6] = i_in6 & {32{i_sel6}};
+    
+    assign o_y = anded_buses[0] | anded_buses[1] | anded_buses[2] |
+                 anded_buses[3] | anded_buses[4] | anded_buses[5] |
+                 anded_buses[6];
+endmodule
+
+//######################################################################
+// HELPER MODULE 7: reg8_we (Thanh ghi 8-bit có WE)
+//######################################################################
+module reg8_we (
+    input  logic       i_clk,
+    input  logic       i_reset, // Active-low reset
+    input  logic       i_we,    // Write enable
+    input  logic [7:0] i_d,     // Dữ liệu 8-bit
+    output logic [7:0] o_q
+);
+    always_ff @(posedge i_clk or negedge i_reset) begin
+        if (!i_reset)
+            o_q <= 8'b0;
+        else if (i_we)
+            o_q <= i_d;
+    end
+endmodule
+
+//######################################################################
+// MODULE CON 1: lsu_decoder (Bộ giải mã địa chỉ)
+//######################################################################
+module lsu_decoder (
+     input  logic [31:0] i_lsu_addr,
+     output logic        o_mem_sel,
+     output logic        o_ledr_sel,
+     output logic        o_ledg_sel,
+     output logic        o_hex03_sel,
+     output logic        o_hex47_sel,
+     output logic        o_lcd_sel,
+     output logic        o_sw_sel
+);
+     localparam logic [31:0] MEM_BASE   = 32'h0000_0000;
+     localparam logic [31:0] LEDR_BASE  = 32'h1000_0000;
+     localparam logic [31:0] LEDG_BASE  = 32'h1000_1000;
+     localparam logic [31:0] HEX03_BASE = 32'h1000_2000;
+     localparam logic [31:0] HEX47_BASE = 32'h1000_3000;
+     localparam logic [31:0] LCD_BASE   = 32'h1000_4000;
+     localparam logic [31:0] SW_BASE    = 32'h1001_0000;
+
+     always_comb begin
+         logic mem_sel_nor_in;
+         logic ledr_nor_in, ledg_nor_in, hex03_nor_in, hex47_nor_in, lcd_nor_in, sw_nor_in;
+        
+         mem_sel_nor_in = 1'b0;
+         for (int i = 11; i <= 31; i = i + 1) begin
+             mem_sel_nor_in = mem_sel_nor_in | i_lsu_addr[i];
+         end
+         o_mem_sel = ~mem_sel_nor_in;
+        
+         ledr_nor_in = 1'b0;
+         ledg_nor_in = 1'b0;
+         hex03_nor_in = 1'b0;
+         hex47_nor_in = 1'b0;
+         lcd_nor_in = 1'b0;
+         sw_nor_in = 1'b0;
+         for (int i = 12; i <= 31; i = i + 1) begin
+             ledr_nor_in  = ledr_nor_in  | (i_lsu_addr[i] ^ LEDR_BASE[i]);// dùng xor bit-wise để kiểm tra logic 
+             ledg_nor_in  = ledg_nor_in  | (i_lsu_addr[i] ^ LEDG_BASE[i]);
+             hex03_nor_in = hex03_nor_in | (i_lsu_addr[i] ^ HEX03_BASE[i]);
+             hex47_nor_in = hex47_nor_in | (i_lsu_addr[i] ^ HEX47_BASE[i]);
+             lcd_nor_in   = lcd_nor_in   | (i_lsu_addr[i] ^ LCD_BASE[i]);
+             sw_nor_in    = sw_nor_in    | (i_lsu_addr[i] ^ SW_BASE[i]);
+         end
+        
+         o_ledr_sel  = ~ledr_nor_in;// do kết quả xor bị ngược với logic kiểm tra bằng (giống ra 0 khác ra 1)
+         o_ledg_sel  = ~ledg_nor_in;
+         o_hex03_sel = ~hex03_nor_in;
+         o_hex47_sel = ~hex47_nor_in;
+         o_lcd_sel   = ~lcd_nor_in;
+         o_sw_sel    = ~sw_nor_in;
+     end
+endmodule
+
+//######################################################################
+// MODULE CON 2: lsu_output_buffer (Khối Ghi ra I/O) [ĐÃ SỬA LỖI]
+//######################################################################
+module lsu_output_buffer (
+    // ... (Tất cả các cổng input/output giữ nguyên) ...
+    // --- CỔNG GIỮ NGUYÊN ---
+    input  logic       i_clk,
+    input  logic       i_reset,
+    input  logic       i_lsu_wren,
+    input  logic [31:0] i_st_data,
+    input  logic [2:0]  i_mem_funct3,
+    input  logic [1:0]  i_addr_bits,
+    input  logic       i_ledr_sel,
+    input  logic       i_ledg_sel,
+    input  logic       i_hex03_sel,
+    input  logic       i_hex47_sel,
+    input  logic       i_lcd_sel,
+     output logic [31:0] o_io_ledr,
+     output logic [31:0] o_io_ledg,
+     output logic [6:0]  o_io_hex0,
+     output logic [6:0]  o_io_hex1,
+     output logic [6:0]  o_io_hex2,
+     output logic [6:0]  o_io_hex3,
+     output logic [6:0]  o_io_hex4,
+     output logic [6:0]  o_io_hex5,
+     output logic [6:0]  o_io_hex6,
+     output logic [6:0]  o_io_hex7, 
+     output logic [31:0] o_io_lcd,
+     output logic [31:0] o_ledr_data,
+     output logic [31:0] o_ledg_data,
+     output logic [31:0] o_hex03_data,
+     output logic [31:0] o_hex47_data,
+     output logic [31:0] o_lcd_data
+);
+
+    logic [3:0] io_bmask;
+    logic f2, f1, f0, a1, a0;
+    logic is_sb, is_sh, is_sw;
+    logic [3:0] ledr_we, ledg_we, hex03_we, hex47_we, lcd_we;
+    logic [7:0] ledr_q[3:0], ledg_q[3:0], hex03_q[3:0], hex47_q[3:0], lcd_q[3:0];
+
+    // --- LOGIC MỚI: DỮ LIỆU I/O ĐÃ DỊCH (SHIFTER) ---
+    logic [31:0] wdata_to_io;
+
+    // 1. Tạo byte mask cho I/O (Tổ hợp) - GIỮ NGUYÊN
+    always_comb begin
+        f2 = i_mem_funct3[2]; f1 = i_mem_funct3[1]; f0 = i_mem_funct3[0];
+        a1 = i_addr_bits[1]; a0 = i_addr_bits[0];
+        is_sb = (~f2) & (~f1) & (~f0); // 000
+        is_sh = (~f2) & (~f1) & ( f0); // 001
+        is_sw = (~f2) & ( f1) & (~f0); // 010
+        io_bmask[0] = ( ( is_sb & ((~a1) & (~a0)) ) | ( is_sh & (~a1) ) | ( is_sw ) );
+        io_bmask[1] = ( ( is_sb & ((~a1) & ( a0)) ) | ( is_sh & (~a1) ) | ( is_sw ) );
+        io_bmask[2] = ( ( is_sb & (( a1) & (~a0)) ) | ( is_sh & ( a1) ) | ( is_sw ) );
+        io_bmask[3] = ( ( is_sb & (( a1) & ( a0)) ) | ( is_sh & ( a1) ) | ( is_sw ) );
+        io_bmask = io_bmask & {4{i_lsu_wren}};
+    end
+
+    // 2. TẠO DỮ LIỆU GHI ĐÃ DỊCH (Store Data Shifter for I/O)
+    always_comb begin
+        wdata_to_io = i_st_data; // Mặc định cho SW
+        if (is_sb) begin // Store Byte
+            case (i_addr_bits)
+                2'b00:  wdata_to_io = {24'h0, i_st_data[7:0]};
+                2'b01:  wdata_to_io = {16'h0, i_st_data[7:0], 8'h0};
+                2'b10:  wdata_to_io = {8'h0,  i_st_data[7:0], 16'h0};
+                2'b11:  wdata_to_io = {       i_st_data[7:0], 24'h0};
+                default: wdata_to_io = {24'h0, i_st_data[7:0]}; 
+            endcase
+        end else if (is_sh) begin // Store Half-word
+            case (i_addr_bits[1]) // Chỉ dùng bit 1
+                1'b0:   wdata_to_io = {16'h0, i_st_data[15:0]}; // ...00 và ...01
+                1'b1:   wdata_to_io = {i_st_data[15:0], 16'h0}; // ...10 và ...11
+            endcase
+        end
+    end
+
+    // 3. Tạo 20 tín hiệu Write Enable (Tổ hợp) - GIỮ NGUYÊN
+    always_comb begin
+        for (int i = 0; i < 4; i = i + 1) begin 
+            ledr_we[i]  = i_ledr_sel  & io_bmask[i];
+            ledg_we[i]  = i_ledg_sel  & io_bmask[i];
+            hex03_we[i] = i_hex03_sel & io_bmask[i];
+            hex47_we[i] = i_hex47_sel & io_bmask[i];
+            lcd_we[i]   = i_lcd_sel   & io_bmask[i];
+        end
+    end
+
+    // 4. Khối 20 Thanh ghi 8-bit (Tuần tự) - [ĐÃ SỬA]
+    genvar i;
+    generate
+        for (i = 0; i < 4; i = i + 1) begin : GEN_IO_REGS
+            // SỬA Ở ĐÂY: Dùng 'wdata_to_io' đã dịch
+            reg8_we u_ledr_reg (
+                .i_clk(i_clk), .i_reset(i_reset),
+                .i_we(ledr_we[i]),
+                .i_d(wdata_to_io[i*8 +: 8]), .o_q(ledr_q[i])
+            );
+            reg8_we u_ledg_reg (
+                .i_clk(i_clk), .i_reset(i_reset),
+                .i_we(ledg_we[i]),
+                .i_d(wdata_to_io[i*8 +: 8]), .o_q(ledg_q[i])
+            );
+            reg8_we u_hex03_reg (
+                .i_clk(i_clk), .i_reset(i_reset),
+                .i_we(hex03_we[i]),
+                .i_d(wdata_to_io[i*8 +: 8]), .o_q(hex03_q[i])
+            );
+            reg8_we u_hex47_reg (
+                .i_clk(i_clk), .i_reset(i_reset),
+                .i_we(hex47_we[i]),
+                .i_d(wdata_to_io[i*8 +: 8]), .o_q(hex47_q[i])
+            );
+            reg8_we u_lcd_reg (
+                .i_clk(i_clk), .i_reset(i_reset),
+                .i_we(lcd_we[i]),
+                .i_d(wdata_to_io[i*8 +: 8]), .o_q(lcd_q[i])
+            );
+        end
+    endgenerate
+    
+    // 5. Gán cổng đầu ra (Tổ hợp) - GIỮ NGUYÊN
+     assign o_io_ledr = {ledr_q[3], ledr_q[2], ledr_q[1], ledr_q[0]};
+    assign o_io_ledg = {ledg_q[3], ledg_q[2], ledg_q[1], ledg_q[0]};
+    assign o_io_lcd  = {lcd_q[3],  lcd_q[2],  lcd_q[1],  lcd_q[0]};
+    assign o_io_hex0 = hex03_q[0][6:0]; // Nối thanh ghi 0
+    assign o_io_hex1 = hex03_q[1][6:0]; // Nối thanh ghi 1
+    assign o_io_hex2 = hex03_q[2][6:0]; // Nối thanh ghi 2
+    assign o_io_hex3 = hex03_q[3][6:0]; // Nối thanh ghi 3
+    assign o_io_hex4 = hex47_q[0][6:0]; // Nối thanh ghi 4
+    assign o_io_hex5 = hex47_q[1][6:0]; // Nối thanh ghi 5
+    assign o_io_hex6 = hex47_q[2][6:0]; // Nối thanh ghi 6
+    assign o_io_hex7 = hex47_q[3][6:0]; // Nối thanh ghi 7
+    assign o_ledr_data  = {ledr_q[3],  ledr_q[2],  ledr_q[1],  ledr_q[0]};
+    assign o_ledg_data  = {ledg_q[3],  ledg_q[2],  ledg_q[1],  ledg_q[0]};
+    assign o_hex03_data = {hex03_q[3], hex03_q[2], hex03_q[1], hex03_q[0]};
+    assign o_hex47_data = {hex47_q[3], hex47_q[2], hex47_q[1], hex47_q[0]};
+    assign o_lcd_data   = {lcd_q[3],   lcd_q[2],   lcd_q[1],   lcd_q[0]};
+endmodule
+
+//######################################################################
+// MODULE CON 3: lsu_input_buffer (Khối Đọc từ I/O)
+//######################################################################
+module lsu_input_buffer (
+     input  logic [31:0] i_io_sw,
+     output logic [31:0] o_sw_data
+);
+     assign o_sw_data = i_io_sw;
+endmodule
+
+//######################################################################
+// MODULE CON 4: lsu_load_processor (Hậu xử lý D$)
+//######################################################################
+module lsu_load_processor (
+     input  logic [31:0] i_raw_mem_data,
+     input  logic [1:0]  i_lsu_addr_bits,
+     input  logic [2:0]  i_mem_funct3,
+     output logic [31:0] o_processed_mem_data
+);
+     logic [7:0]  b0, b1, b2, b3;
+     logic [15:0] h0, h1;
+     logic [7:0]  selected_byte;
+     logic [15:0] selected_half;
+     logic [31:0] lb_data, lbu_data, lh_data, lhu_data, lw_data;
+     
+     assign b0 = i_raw_mem_data[7:0];   assign b1 = i_raw_mem_data[15:8];
+     assign b2 = i_raw_mem_data[23:16]; assign b3 = i_raw_mem_data[31:24];
+     assign h0 = i_raw_mem_data[15:0];  assign h1 = i_raw_mem_data[31:16];
+
+     mux4to1_Nbit #(.WIDTH(8)) u_mux_byte (
+        .i_in0 (b0), 
+		  .i_in1 (b1), 
+		  .i_in2 (b2), 
+		  .i_in3 (b3),
+        .i_sel (i_lsu_addr_bits[1:0]),
+        .o_y   (selected_byte)
+     );
+     
+     mux2to1_Nbit #(.WIDTH(16)) u_mux_half (
+        .i_in0 (h0), 
+		  .i_in1 (h1),
+        .i_sel (i_lsu_addr_bits[1]),
+        .o_y   (selected_half)
+     );// output mux này cho 1 trong 2 loại half word 
+     // xử lí logic trước khi qua mux 
+     assign lw_data  = i_raw_mem_data;
+     assign lb_data  = {{24{selected_byte[7]}}, selected_byte};
+     assign lbu_data = {{24'b0},                selected_byte};
+     assign lh_data  = {{16{selected_half[15]}}, selected_half};
+     assign lhu_data = {{16'b0},                 selected_half};
+
+     // Khởi tạo MUX 5-to-1 cuối cùng (nay đã tích hợp decoder)
+     mux5to1_32bit_funct3 u_final_mux (
+        .i_in0 (lb_data),
+        .i_in1 (lh_data),
+        .i_in2 (lw_data),
+        .i_in3 (lbu_data),
+        .i_in4 (lhu_data),
+        .i_sel (i_mem_funct3), // Nối trực tiếp 3-bit funct3
+        .o_y   (o_processed_mem_data)
+     );
+     
+endmodule
+
+//######################################################################
+// MODULE CON 5: lsu_read_mux (MUX Đọc)
+//######################################################################
+module lsu_read_mux (
+    input  logic        i_mem_sel,
+    input  logic        i_sw_sel,
+    input  logic        i_ledr_sel,
+    input  logic        i_ledg_sel,
+    input  logic        i_hex03_sel,
+    input  logic        i_hex47_sel,
+    input  logic        i_lcd_sel,
+    input  logic [31:0] i_processed_mem_data,
+    input  logic [31:0] i_raw_mem_data,
+    input  logic [31:0] i_sw_data,
+    input  logic [31:0] i_ledr_readback,
+    input  logic [31:0] i_ledg_readback,
+    input  logic [31:0] i_hex03_readback,
+    input  logic [31:0] i_hex47_readback,
+    input  logic [31:0] i_lcd_readback,
+    output logic [31:0] o_ld_data
+);
+
+    logic [31:0] raw_ld_data;
+
+    // 1. MUX ĐỌC THÔ (7-to-1) đã có tín hiệu điều khiển từ lsu_decoder nên k cần thêm decoder
+    mux7to1_32bit u_mux_raw (
+        .i_in0(i_raw_mem_data),
+        .i_in1(i_sw_data),
+        .i_in2(i_ledr_readback),
+        .i_in3(i_ledg_readback),
+        .i_in4(i_hex03_readback),
+        .i_in5(i_hex47_readback),
+        .i_in6(i_lcd_readback),
+        .i_sel0(i_mem_sel),
+        .i_sel1(i_sw_sel),
+        .i_sel2(i_ledr_sel),
+        .i_sel3(i_ledg_sel),
+        .i_sel4(i_hex03_sel),
+        .i_sel5(i_hex47_sel),
+        .i_sel6(i_lcd_sel),
+        .o_y (raw_ld_data)
+    );
+    
+    // 2. MUX ĐỌC CUỐI CÙNG (2-to-1)
+    mux2to1_Nbit #(.WIDTH(32)) u_mux_final (
+        .i_in0 (raw_ld_data),
+        .i_in1 (i_processed_mem_data),
+        .i_sel (i_mem_sel),
+        .o_y   (o_ld_data)
+    );
+
+endmodule
+
+//######################################################################
+// MODULE CON 6: lsu_store_preprocessor (Tạo Byte Mask cho D$)
+// [PHIÊN BẢN ĐÃ SỬA LỖI HOÀN TOÀN]
+//######################################################################
+module lsu_store_preprocessor (
+    input  logic       i_lsu_wren,
+    input  logic [2:0] i_mem_funct3,
+    input  logic [1:0] i_addr_bits,
+    output logic [3:0] o_mem_bmask,
+    output logic       o_is_sb,
+    output logic       o_is_sh,
+    output logic       o_is_sw
+);
+    // Tín hiệu nội bộ
+    logic f2, f1, f0, a1, a0;
+    logic [3:0] bmask_temp; 
+
+    // Gán các tín hiệu phụ
+    assign f2 = i_mem_funct3[2]; assign f1 = i_mem_funct3[1]; assign f0 = i_mem_funct3[0];
+    assign a1 = i_addr_bits[1];  assign a0 = i_addr_bits[0];
+
+    // GÁN VÀO CÁC CỔNG OUTPUT
+    assign o_is_sb = (~f2) & (~f1) & (~f0); // 000
+    assign o_is_sh = (~f2) & (~f1) & ( f0); // 001
+    assign o_is_sw = (~f2) & ( f1) & (~f0); // 010
+
+    // SỬ DỤNG CÁC CỔNG OUTPUT ĐỂ TÍNH TOÁN
+    assign bmask_temp[0] = ( ( o_is_sb & ((~a1) & (~a0)) ) | ( o_is_sh & (~a1) ) | ( o_is_sw ) );
+    assign bmask_temp[1] = ( ( o_is_sb & ((~a1) & ( a0)) ) | ( o_is_sh & (~a1) ) | ( o_is_sw ) );
+    assign bmask_temp[2] = ( ( o_is_sb & (( a1) & (~a0)) ) | ( o_is_sh & ( a1) ) | ( o_is_sw ) );
+    assign bmask_temp[3] = ( ( o_is_sb & (( a1) & ( a0)) ) | ( o_is_sh & ( a1) ) | ( o_is_sw ) );
+    
+    assign o_mem_bmask = bmask_temp & {4{i_lsu_wren}};
+endmodule
