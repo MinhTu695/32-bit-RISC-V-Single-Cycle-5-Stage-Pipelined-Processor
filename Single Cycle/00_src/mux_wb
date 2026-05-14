@@ -1,0 +1,92 @@
+//######################################################################
+// Module: decoder_wb_2to3
+// - Module con (leaf), chỉ giải mã 2-bit -> 3-bit one-hot.
+// - Hiện thực hoàn toàn bằng cổng logic (AND, NOT).
+//######################################################################
+module decoder_wb_2to3 (
+    // Input
+    input  logic [1:0] i_sel_in, // Tín hiệu i_wb_sel[1:0]
+    
+    // Outputs (one-hot)
+    output logic       o_sel_alu,
+    output logic       o_sel_mem,
+    output logic       o_sel_pc4
+);
+
+    // 1. sel_alu = (i_sel_in == 2'b00)
+    assign o_sel_alu = (~i_sel_in[1]) & (~i_sel_in[0]);
+
+    // 2. sel_mem = (i_sel_in == 2'b01)
+    assign o_sel_mem = (~i_sel_in[1]) & ( i_sel_in[0]);
+
+    // 3. sel_pc4 = (i_sel_in == 2'b10)
+    assign o_sel_pc4 = ( i_sel_in[1]) & (~i_sel_in[0]);
+
+endmodule 
+//######################################################################
+// Module: mux_wb_logic
+// - Module MUX hoàn chỉnh: Chứa cả decoder và logic AND-OR.
+// - Nhận tín hiệu chọn 2-bit (i_wb_sel) làm đầu vào.
+//######################################################################
+module mux_wb_logic (
+    // Inputs (Data)
+    input  logic [31:0] i_data_alu,
+    input  logic [31:0] i_data_mem,
+    input  logic [31:0] i_data_pc4,
+    
+    // Input (Control)
+    input  logic [1:0]  i_wb_sel, // Tín hiệu chọn 2-bit
+    
+    // Output
+    output logic [31:0] o_data_out
+);
+
+    // Wires trung gian (đầu ra của decoder nội bộ)
+    logic w_sel_alu, w_sel_mem, w_sel_pc4;
+
+    // 1. Instantiate Khối Decoder Nằm Bên Trong
+    decoder_wb_2to3 u_decoder (
+        .i_sel_in   (i_wb_sel),  // Nối tín hiệu 2-bit vào decoder
+        
+        .o_sel_alu  (w_sel_alu),
+        .o_sel_mem  (w_sel_mem),
+        .o_sel_pc4  (w_sel_pc4)
+    );
+
+    // 2. Logic MUX (AND-OR)
+    // Dùng tín hiệu one-hot (w_sel_...) từ decoder nội bộ
+    assign o_data_out = 
+        (i_data_alu & {32{w_sel_alu}}) |
+        (i_data_mem & {32{w_sel_mem}}) |
+        (i_data_pc4 & {32{w_sel_pc4}});
+
+endmodule 
+//######################################################################
+// Module: mux_wb (Top-Level Wrapper)
+// - Module vỏ bọc, chỉ chứa 1 module con 'mux_wb_logic'.
+//######################################################################
+module mux_wb (
+    // Inputs (Data)
+    input  logic [31:0] i_alu_data, // Từ ALU
+    input  logic [31:0] i_ld_data,  // Từ Memory/LSU
+    input  logic [31:0] i_pc_four,  // Từ PC+4
+    
+    // Input (Control)
+    input  logic [1:0]  i_wb_sel,   // Tín hiệu chọn từ ControlUnit
+    
+    // Output
+    output logic [31:0] o_wb_data
+);
+
+    // Instantiate khối logic MUX (đã bao gồm decoder bên trong)
+    mux_wb_logic u_mux_logic (
+        .i_data_alu (i_alu_data),
+        .i_data_mem (i_ld_data),
+        .i_data_pc4 (i_pc_four),
+        
+        .i_wb_sel   (i_wb_sel),   // Truyền tín hiệu 2-bit vào
+        
+        .o_data_out (o_wb_data)
+    );
+
+endmodule 
