@@ -1,0 +1,80 @@
+#-----------------------------------------------------------------------
+# CHƯƠNG TRÌNH KIỂM TRA I/O (PERIPHERAL TEST)
+#
+# Mục tiêu: Kiểm tra tất cả các thiết bị ngoại vi I/O trên kit DE-2.
+# 3. Ghi mẫu 0xAA (10101010) ra LED xanh (LEDG).
+# 4. Vòng lặp chính: Đọc giá trị từ CÔNG TẮC (SWITCH)
+#    và ghi giá trị đó ra LED đỏ (LEDR).
+#-----------------------------------------------------------------------
+
+.text
+_start:
+    # 1. Khởi tạo Stack Pointer (luôn là ý tốt)
+    li sp, 0x18C # Đặt SP ở cuối 2KiB DMEM
+
+#-----------------------------------------------------------------------
+# PHẦN 1: KIỂM TRA ĐẦU RA TĨNH (STATIC OUTPUT)
+##-----------------------------------------------------------------------
+# PHẦN 1: Ghi ra HEX 0-3
+#-----------------------------------------------------------------------
+    # Mục tiêu: Hiển thị "4321"
+    # HEX3 = '4' = 0x19
+    # HEX2 = '3' = 0x30
+    # HEX1 = '2' = 0x24
+    # HEX0 = '1' = 0x79
+    #
+    # Ghép 4 giá trị 7-bit vào 1 word 32-bit:
+    # 00011001 (HEX3)
+    #   00110000 (HEX2)
+    #     00100100 (HEX1)
+    #       01111001 (HEX0)
+    #
+    # Giá trị 32-bit = 0x79243019
+
+    li t0, 0x10002000    # Nạp địa chỉ của HEX 0-3
+    li t1, 0x99B0A4F9    # Nạp giá trị "4321" (Anode chung) 
+    sw t1, 0(t0)         # Ghi ra HEX 0-3
+
+#-----------------------------------------------------------------------
+# PHẦN 2: Ghi ra HEX 4-7
+#-----------------------------------------------------------------------
+    # Mục tiêu: Hiển thị "8765"
+    # HEX7 = '8' = 0x00
+    # HEX6 = '7' = 0x78
+    # HEX5 = '6' = 0x02
+    # HEX4 = '5' = 0x12
+    #
+    # Ghép 4 giá trị 7-bit vào 1 word 32-bit:
+    # 00000000 (HEX7)
+    #   01111000 (HEX6)
+    #     00000010 (HEX5)
+    #       00010010 (HEX4)
+    #
+    # Giá trị 32-bit = 0x00780212
+
+    li t0, 0x10003000    # Nạp địa chỉ của HEX 4-7
+    li t1, 0x80F88292     # Nạp giá trị "8765" (Anode chung)
+    sw t1, 0(t0)         # Ghi ra HEX 4-7
+
+
+    # Test 2: Ghi ra LED Xanh (LEDG)
+    li t0, 0x10001000 # Địa chỉ của LEDG
+    li t1, 0xAA       # Mẫu 10101010
+    sw t1, 0(t0)      # Ghi ra LEDG
+
+
+
+#-----------------------------------------------------------------------
+# PHẦN 2: KIỂM TRA ĐỘNG (VÒNG LẶP CHÍNH)
+#-----------------------------------------------------------------------
+main_loop:
+    # Đọc từ CÔNG TẮC (SWITCH)
+    li t0, 0x10010000 # Nạp địa chỉ của SWITCH
+    lw t1, 0(t0)      # Đọc giá trị công tắc vào t1
+    
+    # Ghi ra LED ĐỎ (LEDR)
+    li t0, 0x10000000 # Nạp địa chỉ của LEDR
+    sw t1, 0(t0)      # Ghi giá trị (từ công tắc) ra LED
+    
+    # Lặp lại
+    beq zero, zero, main_loop

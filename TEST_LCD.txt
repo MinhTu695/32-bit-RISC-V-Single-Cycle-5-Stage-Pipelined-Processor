@@ -1,0 +1,132 @@
+.text
+# ==========================================================
+# CHUONG TRINH TEST LCD - "CTMT_KSTN_5"
+#
+# PHIEN BAN: TAO XUNG ENABLE (EN) BANG PHAN MEM (ASSEMBLY)
+# CANH BAO: KEM HIEU QUA VA PHU THUOC TAN SO CLOCK
+# ==========================================================
+
+# ==========================================================
+# CHUONG TRINH CHINH
+# ==========================================================
+_start:
+    li sp, 0x18C
+    jal ra, lcd_init
+
+    li a0, 0x43
+    jal ra, lcd_write_data
+    li a0, 0x54
+    jal ra, lcd_write_data
+    li a0, 0x4D
+    jal ra, lcd_write_data
+    li a0, 0x54
+    jal ra, lcd_write_data
+    li a0, 0x5F
+    jal ra, lcd_write_data
+    li a0, 0x4B
+    jal ra, lcd_write_data
+    li a0, 0x53
+    jal ra, lcd_write_data
+    li a0, 0x54
+    jal ra, lcd_write_data
+    li a0, 0x4E
+    jal ra, lcd_write_data
+    li a0, 0x5F
+    jal ra, lcd_write_data
+    li a0, 0x35
+    jal ra, lcd_write_data
+
+end_program:
+    beq zero, zero, end_program
+
+# ==========================================================
+# HAM KHOI TAO LCD (voi Delay)
+# ==========================================================
+lcd_init:
+    addi sp, sp, -4
+    sw ra, 0(sp)
+
+    li a0, 2500000
+    jal ra, delay_cycles
+
+    li a0, 0x38
+    jal ra, lcd_write_cmd
+    li a0, 250000
+    jal ra, delay_cycles
+
+    li a0, 0x0C
+    jal ra, lcd_write_cmd
+    li a0, 50000
+    jal ra, delay_cycles
+
+    li a0, 0x01
+    jal ra, lcd_write_cmd
+    li a0, 250000
+    jal ra, delay_cycles
+
+    li a0, 0x06
+    jal ra, lcd_write_cmd
+    li a0, 50000
+    jal ra, delay_cycles
+
+    lw ra, 0(sp)
+    addi sp, sp, 4
+    ret
+
+# ==========================================================
+# HAM GHI LENH (Command)
+# ==========================================================
+lcd_write_cmd:
+    addi sp, sp, -4
+    sw ra, 0(sp)
+
+    li t0, 0x10004000
+    li t1, 0x80000400
+    li t2, 0x80000000
+
+    or t1, a0, t1
+    or t2, a0, t2
+
+    sw t1, 0(t0)
+    li a0, 15
+    jal ra, delay_cycles
+    sw t2, 0(t0)
+
+    lw ra, 0(sp)
+    addi sp, sp, 4
+    ret
+
+# ==========================================================
+# HAM GHI DU LIEU (Data/Character)
+# ==========================================================
+lcd_write_data:
+    addi sp, sp, -4
+    sw ra, 0(sp)
+
+    li t0, 0x10004000
+    li t1, 0x80000600
+    li t2, 0x80000200
+    
+    or t1, a0, t1
+    or t2, a0, t2
+    
+    sw t1, 0(t0)
+    li a0, 15
+    jal ra, delay_cycles
+    sw t2, 0(t0)
+
+    li a0, 50000
+    jal ra, delay_cycles
+
+    lw ra, 0(sp)
+    addi sp, sp, 4
+    ret
+
+# ==========================================================
+# HAM DELAY
+# ==========================================================
+delay_cycles:
+delay_loop:
+    addi a0, a0, -1
+    bne a0, zero, delay_loop
+    ret
