@@ -1,0 +1,35 @@
+//==============================================================================
+// Module: mux2to1
+// Mạch MUX 2-1 thuần cổng logic (full combinational gates)
+//==============================================================================
+
+module mux2to1_b (
+    input  logic [31:0] a,    // Ngõ vào 0
+    input  logic [31:0] b,    // Ngõ vào 1
+    input  logic        sel,  // Tín hiệu chọn
+    output logic [31:0] y     // Ngõ ra
+);
+    // Toán tử bitwise kết hợp với replicate -> chỉ tạo cổng logic AND/OR/NOT
+    assign y = (a & {32{~sel}}) | (b & {32{sel}});
+endmodule : mux2to1_b
+
+
+//==============================================================================
+// Module: mux_operand_b
+// Chọn giữa rs2_data và imm cho operand_b của ALU
+//==============================================================================
+
+module mux_operand_b (
+    input  logic [31:0] i_rs2_data,   // Dữ liệu từ thanh ghi rs2
+    input  logic [31:0] i_imm,        // Hằng số từ ImmGen
+    input  logic        i_opb_sel,    // 1 => chọn imm, 0 => chọn rs2_data
+    output logic [31:0] o_operand_b   // Ngõ ra cho ALU
+);
+    // Gọi lại module mux2to1 (thuần cổng logic)
+    mux2to1_b u_mux_operand_b (
+        .a   (i_rs2_data),  // khi opb_sel = 0 → chọn rs2_data
+        .b   (i_imm),        // khi opb_sel = 1 → chọn imm
+        .sel (i_opb_sel),
+        .y   (o_operand_b)
+    );
+endmodule : mux_operand_b
