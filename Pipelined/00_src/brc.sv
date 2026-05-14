@@ -1,0 +1,63 @@
+// Module: full_adder (Bộ cộng toàn phần 1-bit)
+//****************************************************************
+module full_adder (
+    input  logic a,b,cin,
+    output logic s,cout
+);
+   
+    assign s = a ^ b ^ cin;
+    assign cout = (a & b) | (b & cin) | (a & cin);
+
+endmodule : full_adder
+//============================================================
+//Module BRC so sanh thanh ghi
+//==============================
+module brc (
+  input  logic [31:0] i_rs1_data,
+  input  logic [31:0] i_rs2_data,
+  input  logic             i_br_un,     // Chế độ so sánh: 1 = có dấu, 0 = không dấu
+  output logic             o_br_less,   // Output = 1 nếu rs1 < rs2
+  output logic             o_br_equal   // Output = 1 nếu rs1 == rs2
+);
+
+  // o_br_equal: Logic này hiệu quả và không cần thay đổi.
+  // So sánh bằng XOR bit-wise 2 thanh ghi và NOR bit-reduction của vector ket qua phep XOR.
+  assign o_br_equal = ~|(i_rs1_data ^ i_rs2_data);
+  // Tín hiệu nội bộ cho bộ cộng/trừ
+  logic [31:0] adder_b_in;
+  logic [31:0] sub_result;
+  logic [32:0] Carry;// mo rong them bit thứ 33 làm cờ nhớ C
+  // Logic cho phép trừ: rs1 - rs2 = rs1 + (~rs2) + 1
+  assign adder_b_in = ~i_rs2_data;
+  assign Carry[0]   = 1'b1; // +1 cho phép bù 2 1 la Carry[0] 
+  // Sử dụng vong generate-for để tạo ra một bộ cộng ripple-carry 32-bit.Gom 32 bo full_adder 1bit ten fa_gen[i]
+  genvar i;
+  generate
+    for (i = 0; i < 32; i = i + 1) begin : fa_gen
+     full_adder fa_inst (
+	  .a   (i_rs1_data[i]),
+	  .b   (adder_b_in[i]),
+	  .cin (Carry[i]),
+	  .s	 (sub_result[i]),
+	  .cout(Carry[i+1])
+	  );
+    end
+  endgenerate
+  // Các cờ (flags) từ kết quả của phép trừ
+  logic N, V; // Negative, Overflow
+  logic C; // Carry out
+  logic signed_less;// tin hieu kiem tra rs1<rs2 co dau
+  logic unsigned_less;// tin hieu kiem tra rs1<rs2 khong dau
+  logic rs1_msb; // khai báo bit msb rs1
+  logic rs2_msb; // khai báo bit msb rs2
+// Sử dụng 'assign' để tạo kết nối phần cứng
+  assign rs1_msb = i_rs1_data[31];
+  assign rs2_msb = i_rs2_data[31];
+  assign N = sub_result[31];// bit dau cua phep tru
+  assign C = Carry[32];
+  assign V = Carry[32] ^ Carry[31]; // bit tran la ket qua phep xor 2 carry in out cua MSB
+  assign signed_less = N ^ V; // bitlogic rs1<rs1 la ket qua phep xor bitN va bit V
+  assign unsigned_less = ~C;// So sánh không dấu: rs1 < rs2 khi có borrow, tương đương carry out = 0
+  assign o_br_less = (unsigned_less & ~i_br_un) | (signed_less & i_br_un); // MUX2to1 chon output voi tin hieu chon la i_br_un
+
+endmodule: brc

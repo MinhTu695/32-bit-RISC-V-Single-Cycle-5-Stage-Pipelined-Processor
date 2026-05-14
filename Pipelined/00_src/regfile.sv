@@ -1,0 +1,217 @@
+//****************************************************************
+// Module: decoder5to32 (Bộ giải mã 5-sang-32)
+//****************************************************************
+module decoder5to32 (
+    input  logic [4:0] i_sel,
+    input  logic       i_en,
+    output logic [31:0] o_decoded
+);
+
+    logic [4:0] sel_n;
+    assign sel_n = ~i_sel;
+    assign o_decoded[ 0] = i_en & sel_n[4] & sel_n[3] & sel_n[2] & sel_n[1] & sel_n[0];
+    assign o_decoded[ 1] = i_en & sel_n[4] & sel_n[3] & sel_n[2] & sel_n[1] & i_sel[0];
+    assign o_decoded[ 2] = i_en & sel_n[4] & sel_n[3] & sel_n[2] & i_sel[1] & sel_n[0];
+    assign o_decoded[ 3] = i_en & sel_n[4] & sel_n[3] & sel_n[2] & i_sel[1] & i_sel[0];
+    assign o_decoded[ 4] = i_en & sel_n[4] & sel_n[3] & i_sel[2] & sel_n[1] & sel_n[0];
+    assign o_decoded[ 5] = i_en & sel_n[4] & sel_n[3] & i_sel[2] & sel_n[1] & i_sel[0];
+    assign o_decoded[ 6] = i_en & sel_n[4] & sel_n[3] & i_sel[2] & i_sel[1] & sel_n[0];
+    assign o_decoded[ 7] = i_en & sel_n[4] & sel_n[3] & i_sel[2] & i_sel[1] & i_sel[0];
+    assign o_decoded[ 8] = i_en & sel_n[4] & i_sel[3] & sel_n[2] & sel_n[1] & sel_n[0];
+    assign o_decoded[ 9] = i_en & sel_n[4] & i_sel[3] & sel_n[2] & sel_n[1] & i_sel[0];
+    assign o_decoded[10] = i_en & sel_n[4] & i_sel[3] & sel_n[2] & i_sel[1] & sel_n[0];
+    assign o_decoded[11] = i_en & sel_n[4] & i_sel[3] & sel_n[2] & i_sel[1] & i_sel[0];
+    assign o_decoded[12] = i_en & sel_n[4] & i_sel[3] & i_sel[2] & sel_n[1] & sel_n[0];
+    assign o_decoded[13] = i_en & sel_n[4] & i_sel[3] & i_sel[2] & sel_n[1] & i_sel[0];
+    assign o_decoded[14] = i_en & sel_n[4] & i_sel[3] & i_sel[2] & i_sel[1] & sel_n[0];
+    assign o_decoded[15] = i_en & sel_n[4] & i_sel[3] & i_sel[2] & i_sel[1] & i_sel[0];
+    assign o_decoded[16] = i_en & i_sel[4] & sel_n[3] & sel_n[2] & sel_n[1] & sel_n[0];
+    assign o_decoded[17] = i_en & i_sel[4] & sel_n[3] & sel_n[2] & sel_n[1] & i_sel[0];
+    assign o_decoded[18] = i_en & i_sel[4] & sel_n[3] & sel_n[2] & i_sel[1] & sel_n[0];
+    assign o_decoded[19] = i_en & i_sel[4] & sel_n[3] & sel_n[2] & i_sel[1] & i_sel[0];
+    assign o_decoded[20] = i_en & i_sel[4] & sel_n[3] & i_sel[2] & sel_n[1] & sel_n[0];
+    assign o_decoded[21] = i_en & i_sel[4] & sel_n[3] & i_sel[2] & sel_n[1] & i_sel[0];
+    assign o_decoded[22] = i_en & i_sel[4] & sel_n[3] & i_sel[2] & i_sel[1] & sel_n[0];
+    assign o_decoded[23] = i_en & i_sel[4] & sel_n[3] & i_sel[2] & i_sel[1] & i_sel[0];
+    assign o_decoded[24] = i_en & i_sel[4] & i_sel[3] & sel_n[2] & sel_n[1] & sel_n[0];
+    assign o_decoded[25] = i_en & i_sel[4] & i_sel[3] & sel_n[2] & sel_n[1] & i_sel[0];
+    assign o_decoded[26] = i_en & i_sel[4] & i_sel[3] & sel_n[2] & i_sel[1] & sel_n[0];
+    assign o_decoded[27] = i_en & i_sel[4] & i_sel[3] & sel_n[2] & i_sel[1] & i_sel[0];
+    assign o_decoded[28] = i_en & i_sel[4] & i_sel[3] & i_sel[2] & sel_n[1] & sel_n[0];
+    assign o_decoded[29] = i_en & i_sel[4] & i_sel[3] & i_sel[2] & sel_n[1] & i_sel[0];
+    assign o_decoded[30] = i_en & i_sel[4] & i_sel[3] & i_sel[2] & i_sel[1] & sel_n[0];
+    assign o_decoded[31] = i_en & i_sel[4] & i_sel[3] & i_sel[2] & i_sel[1] & i_sel[0];
+endmodule
+
+
+//****************************************************************
+// Module: mux32to1_32bit (Bộ dồn kênh 32-vào-1, 32-bit)
+//****************************************************************
+module mux32to1_32bit (
+    input  logic [4:0]  i_sel,
+    input  logic [31:0] i_in [31:0], // Mảng 32-phần-tử, mỗi phần tử 32-bit
+    output logic [31:0] o_y
+);
+    logic [31:0] decoded_sel;
+    decoder5to32 u_dec (
+        .i_sel    (i_sel),
+        .i_en     (1'b1), // Luôn bật
+        .o_decoded(decoded_sel)
+    );
+    logic [31:0] anded_buses [31:0];
+    genvar i;
+    generate
+        for (i = 0; i < 32; i = i + 1) begin : GEN_MUX_ANDS
+            assign anded_buses[i] = i_in[i] & {32{decoded_sel[i]}};
+        end
+    endgenerate
+    always_comb begin
+        o_y = 32'b0; // Bắt đầu bằng 0
+        for (int k = 0; k < 32; k = k + 1) begin
+            o_y = o_y | anded_buses[k];
+        end
+    end
+endmodule
+
+
+//****************************************************************
+// Module: reg32_regfile (Thanh ghi 32-bit)
+//****************************************************************
+module reg32_regfile (
+    input  logic       i_clk,
+    input  logic       i_reset,  // Giả định reset tích cực thấp
+    input  logic       i_we,
+    input  logic [31:0] i_d,
+    output logic [31:0] o_q
+);
+
+    always_ff @(posedge i_clk or negedge i_reset) begin
+        if (i_reset == 1'b0)
+            o_q <= 32'b0;
+        else if (i_we)
+            o_q <= i_d;
+    end
+endmodule
+
+
+//****************************************************************
+// Module: reg32_bank 
+//****************************************************************
+module reg32_bank (
+    input  logic        i_clk,
+    input  logic        i_reset,
+    input  logic [31:0] i_final_reg_we, // 32 tín hiệu 'we'
+    input  logic [31:0] i_rd_data,      // 1 bus dữ liệu ghi
+    output logic [31:0] o_reg_q [31:0] // 32 bus dữ liệu đọc
+);
+
+    //============================================================
+    // 2. Khối 32 Thanh ghi
+    // (Đây là khối generate-for đã được di dời từ regfile)
+    //============================================================
+    genvar i;
+    generate
+        for (i = 0; i < 32; i = i + 1) begin : GEN_REGS
+            reg32_regfile u_reg (
+                .i_clk   (i_clk),
+                .i_reset (i_reset),
+                .i_we    (i_final_reg_we[i]), // Dùng tín hiệu 'we' thứ i
+                .i_d     (i_rd_data),         // Dùng chung 1 bus dữ liệu ghi
+                .o_q     (o_reg_q[i])         // Nối ra bus đọc thứ i
+            );
+        end
+    endgenerate
+
+endmodule
+
+
+//****************************************************************
+// Module: regfile (Module đỉnh)
+//****************************************************************
+module regfile (
+    input  logic       i_clk,
+    input  logic       i_reset,
+    input  logic       i_rd_wren,    // Write enable cho thanh ghi đích
+    input  logic [4:0] i_rs1_addr,
+    input  logic [4:0] i_rs2_addr,
+    input  logic [4:0] i_rd_addr,
+    input  logic [31:0] i_rd_data,
+    output logic [31:0] o_rs1_data,
+    output logic [31:0] o_rs2_data
+);
+
+    //============================================================
+    // 1. Logic Ghi (Write Logic) 
+    //============================================================
+    
+    // Giải mã địa chỉ ghi (rd) và tín hiệu write enable
+    logic [31:0] decoder_we_out;// ngõ ra của module con
+    decoder5to32 u_decoder (
+        .i_en     (i_rd_wren),
+        .i_sel    (i_rd_addr),
+        .o_decoded(decoder_we_out)
+    );
+
+    // Tín hiệu write enable cuối cùng cho 32 thanh ghi
+    logic [31:0] final_reg_we;
+    
+    assign final_reg_we[0] = 1'b0; // Buộc thanh ghi 0 không được ghi
+    assign final_reg_we[31:1] = decoder_we_out[31:1];
+
+
+    //============================================================
+    // 2. Khối 32 Thanh ghi 
+    //============================================================
+    
+    // Dây (wire) để nhận 32 bus đầu ra từ bank
+    logic [31:0] reg_q_bank_out [31:0];// ngõ ra của module con
+
+    // Khởi tạo 1 module reg32_bank
+    reg32_bank u_bank (
+        .i_clk          (i_clk),
+        .i_reset        (i_reset),
+        .i_final_reg_we (final_reg_we), // Nối 32 tín hiệu 'we' vào
+        .i_rd_data      (i_rd_data),     // Nối 1 bus dữ liệu ghi vào
+        .o_reg_q        (reg_q_bank_out) // Nối 32 bus dữ liệu đọc ra
+    );
+
+    //============================================================
+    // 3. Logic Đọc (Read Logic) - (Nối dây vào MUX)
+    //============================================================
+
+// Dữ liệu đọc thô từ mảng thanh ghi (Giá trị cũ)
+    logic [31:0] rs1_data_raw, rs2_data_raw;
+
+    mux32to1_32bit u_mux_rs1 (
+        .i_sel (i_rs1_addr),
+        .i_in  (reg_q_bank_out),
+        .o_y   (rs1_data_raw) // Đổi tên output thành raw
+    );
+
+    mux32to1_32bit u_mux_rs2 (
+        .i_sel (i_rs2_addr),
+        .i_in  (reg_q_bank_out),
+        .o_y   (rs2_data_raw) // Đổi tên output thành raw
+    );
+
+    // ============================================================
+    // 4. LOGIC INTERNAL FORWARDING (WRITE-THEN-READ) - [MỚI]
+    // ============================================================
+    
+    // Kiểm tra điều kiện Bypass:
+    // 1. Có lệnh ghi (WE = 1)
+    // 2. Địa chỉ ghi khác 0 (Thanh ghi x0 luôn là 0)
+    // 3. Địa chỉ ghi TRÙNG địa chỉ đọc
+    
+    wire bypass_rs1 = i_rd_wren && (i_rd_addr != 0) && (i_rd_addr == i_rs1_addr);
+    wire bypass_rs2 = i_rd_wren && (i_rd_addr != 0) && (i_rd_addr == i_rs2_addr);
+
+    // Mux chọn dữ liệu cuối cùng:
+    // Nếu Bypass -> Lấy thẳng i_rd_data (Data mới nhất đang chờ ghi)
+    // Nếu không  -> Lấy rs_data_raw (Data cũ trong thanh ghi)
+    
+    assign o_rs1_data = (bypass_rs1) ? i_rd_data : rs1_data_raw;
+    assign o_rs2_data = (bypass_rs2) ? i_rd_data : rs2_data_raw;
+
+
+endmodule 
