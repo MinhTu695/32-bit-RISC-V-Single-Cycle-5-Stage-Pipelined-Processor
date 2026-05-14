@@ -1,0 +1,922 @@
+//################################################################################
+
+// Module: pipelined (Top-Level)
+
+// Description: RV32I 5-Stage Pipelined Processor
+
+//################################################################################
+
+
+
+module pipelined (
+
+    // Inputs
+
+    input  logic        i_clk,
+
+    input  logic        i_reset,    // Global low active reset
+
+    input  logic [31:0] i_io_sw,    // Switches Input
+
+
+
+    // Debug & Control Outputs
+
+    output logic [31:0] o_pc_debug, // Debug Program Counter (WB Stage)
+
+    output logic        o_insn_vld, // Instruction Valid (WB Stage)
+
+    output logic        o_ctrl,     // Control Flow Instruction (WB Stage)
+
+    output logic        o_mispred,  // Mispredict Signal (Active when Branch Taken)
+
+
+
+    // Peripherals Outputs (Directly from LSU)
+
+    output logic [31:0] o_io_ledr,
+
+    output logic [31:0] o_io_ledg,
+
+    output logic [ 6:0] o_io_hex0,
+
+    output logic [ 6:0] o_io_hex1,
+
+    output logic [ 6:0] o_io_hex2,
+
+    output logic [ 6:0] o_io_hex3,
+
+    output logic [ 6:0] o_io_hex4,
+
+    output logic [ 6:0] o_io_hex5,
+
+    output logic [ 6:0] o_io_hex6,
+
+    output logic [ 6:0] o_io_hex7,
+
+    output logic [31:0] o_io_lcd
+
+);
+
+
+
+    //========================================================================
+
+    // 1. SIGNAL DECLARATIONS (Khai báo dây nối giữa các tầng)
+
+    //========================================================================
+
+
+
+    // --- IF Stage ---
+
+    logic [31:0] pc_next_IF, pc_IF, pc_four_IF;
+
+    logic [31:0] instr_IF;
+
+
+
+    // --- ID Stage ---
+
+    logic [31:0] pc_ID, pc_four_ID, instr_ID;
+
+    logic [31:0] rs1_data_ID, rs2_data_ID, imm_ID;
+
+    logic [4:0]  rd_addr_ID;
+
+    logic [2:0]  imm_sel_ID;
+
+    
+
+    // ID Control Signals
+
+    logic [3:0]  alu_op_ID;
+
+    logic        br_un_ID;
+
+    logic        mem_wren_ID, mem_rden_ID;
+
+    logic [2:0]  mem_funct3_ID;
+
+    logic        rd_wren_ID;
+
+    logic [1:0]  wb_sel_ID;
+
+    
+
+    // Hazard Control
+
+    logic        stall_PC, stall_IF_ID, flush_IF_ID, flush_ID_EX;
+
+
+
+    // --- EX Stage ---
+
+    logic [31:0] pc_EX, pc_four_EX, instr_EX;
+
+    logic [31:0] rs1_data_EX, rs2_data_EX, imm_EX;
+
+    logic [4:0]  rd_addr_EX;
+
+    
+
+    // EX Control Signals
+
+    logic [3:0]  alu_op_EX;
+
+    logic        br_un_EX;
+
+    logic        mem_wren_EX, mem_rden_EX;
+
+    logic [2:0]  mem_funct3_EX;
+
+    logic        rd_wren_EX;
+
+    logic [1:0]  wb_sel_EX;
+
+
+
+    // EX Calculation Signals
+
+    logic [1:0]  fwd_sel_mux1, fwd_sel_mux2;
+
+    logic [31:0] alu_op_a_EX, alu_op_b_EX; // Output của Forwarding Mux
+
+    logic [31:0] alu_result_EX;
+
+    logic        br_eq_EX, br_lt_EX;
+
+    logic        pc_sel_EX; // Branch Taken Signal
+
+
+
+    // --- MEM Stage ---
+
+    logic [31:0] pc_MEM; // [FIXED] Bổ sung khai báo PC tại MEM
+
+    logic [31:0] pc_four_MEM, instr_MEM; 
+
+    logic [31:0] alu_result_MEM, rs2_data_MEM;
+
+    logic [4:0]  rd_addr_MEM;
+
+    
+
+    // MEM Control Signals
+
+    logic        mem_wren_MEM, mem_rden_MEM; 
+
+    logic [2:0]  mem_funct3_MEM;
+
+    logic        rd_wren_MEM;
+
+    logic [1:0]  wb_sel_MEM;
+
+    
+
+    logic [31:0] lsu_rdata_MEM;
+
+
+
+    // --- WB Stage ---
+
+    logic [31:0] pc_WB; // [FIXED] Bổ sung khai báo PC tại WB
+
+    logic [31:0] pc_four_WB;
+
+    logic [31:0] alu_result_WB, lsu_rdata_WB;
+
+    logic [4:0]  rd_addr_WB;
+
+    logic        rd_wren_WB;
+
+    logic [1:0]  wb_sel_WB;
+
+    logic [31:0] wb_final_data;
+
+    logic [31:0] instr_WB; 
+
+// Valid Signals
+    logic vld_ID;   // Output từ Control Unit
+    logic vld_EX;   // Output từ ID/EX Reg
+    logic vld_MEM;  // Output từ EX/MEM Reg
+    logic vld_WB;   // Output từ MEM/WB Reg (Chính là o_insn_vld cuối cùng)
+
+
+
+// Logic thanh ghi giữ chậm PC 1 nhịp (để khớp với độ trễ IMEM)
+
+
+
+
+
+
+    //========================================================================
+
+    // 2. STAGE 1: INSTRUCTION FETCH (IF)
+
+    //========================================================================
+
+
+
+    // MUX chọn PC Next
+
+    mux_pc u_mux_pc (
+
+        .PCfour_IF  (pc_four_IF),     // [FIXED] Sửa tên dây PC_4_IF -> pc_four_IF
+
+        .alu_EX    (alu_result_EX), 
+
+        .pc_sel     (pc_sel_EX),      // [FIXED] Nối với pc_sel_EX (từ Branch Unit) thay vì 'pc_sel' chưa khai báo
+
+        .PCnext_IF  (pc_next_IF)
+
+    );
+
+
+
+    // PC Register
+
+    pc_reg_if u_pc_reg (
+
+        .i_clk     (i_clk),
+
+        .i_reset   (i_reset),
+
+        .i_stall   (stall_PC),
+
+        .PCnext_IF (pc_next_IF),
+
+        .PC_IF     (pc_IF)
+
+    );
+
+
+
+    // Adder +4
+
+    add_4 u_add_4 (
+
+        .i_pc      (pc_IF),
+
+        .o_pc_four (pc_four_IF)
+
+    );
+
+
+
+    // Instruction Memory
+
+    imem_pipelined u_imem (
+
+        .i_clk     (i_clk),
+
+        .i_reset   (i_reset),
+
+        .i_addr    (pc_IF[15:2]), // Word Address
+
+        .instr_IF   (instr_IF)
+
+    );
+
+
+
+    // IF/ID Pipeline Register
+
+    if_id_reg u_if_id_reg (
+
+        .i_clk     (i_clk),
+
+        .i_reset   (i_reset),
+
+        .i_stall   (stall_IF_ID),
+
+        .i_flush   (flush_IF_ID), 
+
+        .PC_IF     (pc_IF),
+
+        .PCfour_IF (pc_four_IF),
+
+        .instr_IF  (instr_IF),
+
+        .PC_ID     (pc_ID),
+
+        .PCfour_ID (pc_four_ID),
+
+        .instr_ID  (instr_ID)
+
+    );
+
+
+
+    //========================================================================
+
+    // 3. STAGE 2: INSTRUCTION DECODE (ID)
+
+    //========================================================================
+
+
+
+    // Decode Addresses
+
+    wire [4:0] rs1_addr_ID = instr_ID[19:15];
+
+    wire [4:0] rs2_addr_ID = instr_ID[24:20];
+
+    assign     rd_addr_ID  = instr_ID[11:7];
+
+    wire [2:0] instr_type_ID = imm_sel_ID; 
+
+
+
+    // Hazard Detection Unit
+
+    hazard_detection_unit u_hazard_unit (
+
+        .instr_ID     (instr_ID),
+
+        .instr_EX     (instr_EX),
+
+        .branch_taken (pc_sel_EX), 
+
+        .stall_PC     (stall_PC),
+
+        .stall_IF_ID  (stall_IF_ID),
+
+        .flush_IF_ID  (flush_IF_ID),
+
+        .flush_ID_EX  (flush_ID_EX)
+
+    );
+
+
+
+    // Control Unit
+
+    control_unit u_control_unit (
+
+        .inst_ID      (instr_ID), 
+
+        .o_imm_sel    (imm_sel_ID),
+
+        .o_alu_op     (alu_op_ID),
+
+        .o_br_un      (br_un_ID),
+
+        .o_mem_wren   (mem_wren_ID),
+
+        .o_mem_read   (mem_rden_ID),
+
+        .o_mem_funct3 (mem_funct3_ID),
+
+        .o_rd_wren    (rd_wren_ID),
+
+        .o_wb_sel     (wb_sel_ID),
+        .o_insn_vld   (vld_ID)
+
+    );
+
+
+
+    // Register File
+
+    regfile u_regfile (
+
+        .i_clk      (i_clk),
+
+        .i_reset    (i_reset),
+
+        .i_rd_wren  (rd_wren_WB),    
+
+        .i_rs1_addr (rs1_addr_ID),
+
+        .i_rs2_addr (rs2_addr_ID),
+
+        .i_rd_addr  (rd_addr_WB),    
+
+        .i_rd_data  (wb_final_data), 
+
+        .o_rs1_data (rs1_data_ID),
+
+        .o_rs2_data (rs2_data_ID)
+
+    );
+
+
+
+    // Immediate Generator
+
+    imm_gen u_imm_gen (
+
+        .i_instr      (instr_ID),
+
+        .i_instr_type (imm_sel_ID),
+
+        .o_imm_data   (imm_ID)
+
+    );
+
+
+
+    // ID/EX Pipeline Register
+
+    id_ex_reg u_id_ex_reg (
+
+        .i_clk         (i_clk),
+
+        .i_reset       (i_reset),
+
+        .i_flush       (flush_ID_EX),
+
+        .i_stall       (1'b0), 
+
+	.i_insn_vld_ID (vld_ID),
+        
+
+        // Data
+
+        .PC_ID         (pc_ID),
+
+        .PCfour_ID     (pc_four_ID),
+
+        .instr_ID      (instr_ID),
+
+        .rs1_ID        (rs1_data_ID),
+
+        .rs2_ID        (rs2_data_ID),
+
+        .imm_ID        (imm_ID),
+
+        .rd_addr_ID    (rd_addr_ID),
+
+        
+
+        // Control
+
+        .alu_op_ID     (alu_op_ID),
+
+        .i_br_un_ID    (br_un_ID),
+
+        .mem_wren_ID   (mem_wren_ID),
+
+        .mem_rden_ID   (mem_rden_ID),
+
+        .mem_funct3_ID (mem_funct3_ID),
+
+        .rd_wren_ID    (rd_wren_ID),
+
+        .wb_sel_ID     (wb_sel_ID),
+
+
+
+        // Outputs to EX
+
+        .PC_EX         (pc_EX),
+
+        .PCfour_EX     (pc_four_EX),
+
+        .instr_EX      (instr_EX),
+
+        .rs1_EX        (rs1_data_EX),
+
+        .rs2_EX        (rs2_data_EX),
+
+        .imm_EX        (imm_EX),
+
+	.o_insn_vld_EX (vld_EX),
+
+        .rd_addr_EX    (rd_addr_EX),
+
+        .alu_op_EX     (alu_op_EX),
+
+        .br_un_EX      (br_un_EX),
+
+        .mem_wren_EX   (mem_wren_EX),
+
+        .mem_rden_EX   (mem_rden_EX),
+
+        .mem_funct3_EX (mem_funct3_EX),
+
+        .rd_wren_EX    (rd_wren_EX),
+
+        .wb_sel_EX     (wb_sel_EX)
+
+    );
+
+
+
+    //========================================================================
+
+    // 4. STAGE 3: EXECUTE (EX)
+
+    //========================================================================
+
+	 logic [1:0] store_fwd_sel;
+    logic [31:0] rs2_store_final;
+
+    // Forwarding Unit
+
+    forwarding_unit u_forwarding_unit (
+
+        .instr_EX      (instr_EX),
+		  
+		  .instr_WB      (instr_WB),
+
+        .instr_MEM     (instr_MEM), 
+		  
+		  .sel_store_fwd (store_fwd_sel),
+
+        .sel_mux1      (fwd_sel_mux1),
+
+        .sel_mux2      (fwd_sel_mux2)
+
+    );
+
+
+
+    // Forwarding MUX 1
+
+    forwarding_mux_1 u_fwd_mux1 (
+
+        .rs1_EX    (rs1_data_EX),
+
+        .PC_EX     (pc_EX),
+
+        .alu_MEM   (alu_result_MEM), 
+
+        .sel_mux1  (fwd_sel_mux1),
+		  
+		  .o_wb_data   (wb_final_data),
+
+        .out_data  (alu_op_a_EX)
+
+    );
+
+
+
+    // Forwarding MUX 2
+
+    forwarding_mux_2 u_fwd_mux2 (
+
+        .rs2_EX    (rs2_data_EX),
+
+        .imm_EX    (imm_EX),
+
+        .alu_MEM   (alu_result_MEM), 
+
+        .sel_mux2  (fwd_sel_mux2),
+		  
+		  .o_wb_data   (wb_final_data),
+
+
+        .out_data  (alu_op_b_EX)
+
+    );
+
+//MUX đi vào rs2_EX/MEM
+	 forwarding_mux_2 u_mux_store_data (
+        .rs2_EX    (rs2_data_EX),   // 00: Gốc
+        .imm_EX    (32'b0),         // 01: Không dùng (Store k bao giờ lấy Imm làm Data)
+        .alu_MEM   (alu_result_MEM),// 10: Forward MEM
+        .o_wb_data   (wb_final_data), // 11: Forward WB
+        .sel_mux2  (store_fwd_sel), // <--- Tín hiệu chọn mới
+        .out_data  (rs2_store_final)// <--- DỮ LIỆU STORE ĐÃ FORWARD
+    );
+
+    // 1. Giải mã tín hiệu Branch tại EX
+    wire is_branch_EX = (instr_EX[6:0] == 7'b1100011);
+
+    // 2. Tạo Mux phụ chắn trước cửa A của ALU
+    // - Nếu là Branch: Chọn PC để ALU tính địa chỉ (PC + Imm)
+    // - Nếu không: Chọn alu_op_a_EX (rs1) để ALU tính toán
+    logic [31:0] alu_src_a_final;
+    assign alu_src_a_final = (is_branch_EX) ? pc_EX : alu_op_a_EX;
+    // - Branch: Chọn Immediate
+    // - Khác:   Giữ nguyên (rs2 từ Forwarding hoặc Imm của lệnh khác)
+    logic [31:0] alu_src_b_final;
+    assign alu_src_b_final = (is_branch_EX) ? imm_EX : alu_op_b_EX;
+	 
+	 // nếu là lệnh nhảy thì OP ALU nhận là của lệnh ADD 
+	 logic [3:0] alu_op_final;
+    assign alu_op_final = (is_branch_EX) ? 4'b0000 : alu_op_EX; // 4'b0000 là ADD
+
+    // ALU
+
+    alu u_alu (
+
+        .i_op_a     (alu_src_a_final),
+
+        .i_op_b     (alu_src_b_final),
+
+        .i_alu_op   (alu_op_final),
+
+        .o_alu_data (alu_result_EX)
+
+    );
+
+
+
+    // Branch Comparator
+
+    brc u_brc (
+
+        .i_rs1_data (alu_op_a_EX), 
+
+        .i_rs2_data (alu_op_b_EX),
+
+        .i_br_un    (br_un_EX),
+
+        .o_br_less  (br_lt_EX),
+
+        .o_br_equal (br_eq_EX)
+
+    );
+
+
+
+    // Branch Unit
+
+    branch_unit u_branch_unit (
+
+        .instr_EX (instr_EX),
+
+        .br_eq    (br_eq_EX),
+
+        .br_lt    (br_lt_EX),
+
+        .pc_sel   (pc_sel_EX) 
+
+    );
+
+	 
+
+    // EX/MEM Pipeline Register
+
+    ex_mem_reg u_ex_mem_reg (
+
+        .i_clk          (i_clk),
+
+        .i_reset        (i_reset),
+
+        .i_flush        (1'b0),
+
+        .i_stall        (1'b0),
+
+        
+
+        // Data Inputs
+
+        .PC_EX          (pc_EX),
+
+        .PCfour_EX      (pc_four_EX),
+
+        .instr_EX       (instr_EX),
+
+        .alu_EX         (alu_result_EX),
+
+        .rs2_EX         (rs2_store_final), 
+
+        .rd_addr_EX     (rd_addr_EX),
+
+	.i_insn_vld_EX  (vld_EX),       
+
+        // Control Inputs
+
+        .mem_wren_EX    (mem_wren_EX),
+
+        .mem_rden_EX    (mem_rden_EX),
+
+        .mem_funct3_EX  (mem_funct3_EX),
+
+        .rd_wren_EX     (rd_wren_EX),
+
+        .wb_sel_EX      (wb_sel_EX),
+
+
+
+        // Outputs to MEM
+
+        .PC_MEM         (pc_MEM),       // [FIXED] Dùng pc_MEM (thường) để khớp với declaration
+
+        .PCfour_MEM     (pc_four_MEM),
+
+        .instr_MEM      (instr_MEM),
+
+        .alu_MEM        (alu_result_MEM),
+
+        .rs2_MEM        (rs2_data_MEM),
+
+        .rd_addr_MEM    (rd_addr_MEM),
+
+        .mem_wren_MEM   (mem_wren_MEM),
+
+        .mem_rden_MEM   (mem_rden_MEM),
+
+        .mem_funct3_MEM (mem_funct3_MEM),
+
+        .rd_wren_MEM    (rd_wren_MEM),
+
+	.o_insn_vld_MEM (vld_MEM),
+
+        .wb_sel_MEM     (wb_sel_MEM)
+
+    );
+
+
+
+    //========================================================================
+
+    // 5. STAGE 4: MEMORY (MEM)
+
+    //========================================================================
+
+
+
+    // LSU
+
+    lsu u_lsu (
+
+        .i_clk        (i_clk),
+
+        .i_reset      (i_reset),
+
+        .i_lsu_addr   (alu_result_MEM),
+
+        .i_st_data    (rs2_data_MEM),
+
+        .i_lsu_wren   (mem_wren_MEM),
+
+        .i_mem_funct3 (mem_funct3_MEM),
+
+        .o_ld_data    (lsu_rdata_MEM),
+
+        
+
+        // I/O Ports
+
+        .i_io_sw      (i_io_sw),
+
+        .o_io_ledr    (o_io_ledr),
+
+        .o_io_ledg    (o_io_ledg),
+
+        .o_io_hex0    (o_io_hex0),
+
+        .o_io_hex1    (o_io_hex1),
+
+        .o_io_hex2    (o_io_hex2),
+
+        .o_io_hex3    (o_io_hex3),
+
+        .o_io_hex4    (o_io_hex4),
+
+        .o_io_hex5    (o_io_hex5),
+
+        .o_io_hex6    (o_io_hex6),
+
+        .o_io_hex7    (o_io_hex7),
+
+        .o_io_lcd     (o_io_lcd)
+
+    );
+
+
+
+    // MEM/WB Pipeline Register
+
+    mem_wb_reg u_mem_wb_reg (
+
+        .i_clk        (i_clk),
+
+        .i_reset      (i_reset),
+
+        .i_flush      (1'b0),
+
+        .i_stall      (1'b0),
+
+        
+
+        // Data Inputs
+
+        .PCfour_MEM   (pc_four_MEM),
+
+        .PC_MEM       (pc_MEM),      // [FIXED] Dùng pc_MEM (thường)
+
+        .instr_MEM    (instr_MEM),
+
+        .alu_MEM      (alu_result_MEM),
+
+        .lsu_MEM      (lsu_rdata_MEM),
+
+        .rd_addr_MEM  (rd_addr_MEM),
+
+	.i_insn_vld_MEM (vld_MEM),
+        
+
+        // Control Inputs
+
+        .rd_wren_MEM  (rd_wren_MEM),
+
+        .wb_sel_MEM   (wb_sel_MEM),
+
+
+
+        // Outputs to WB
+
+        .PCfour_WB    (pc_four_WB),
+
+        .PC_WB        (pc_WB),       // [FIXED] Dùng pc_WB (thường)
+
+        .alu_WB       (alu_result_WB),
+
+        .lsu_WB       (lsu_rdata_WB),
+
+        .rd_addr_WB   (rd_addr_WB),
+
+        .rd_wren_WB   (rd_wren_WB),
+
+        .instr_WB     (instr_WB),
+	
+	.o_insn_vld_WB  (vld_WB),
+
+        .wb_sel_WB    (wb_sel_WB)
+
+    );
+
+
+
+    //========================================================================
+
+    // 6. STAGE 5: WRITEBACK (WB)
+
+    //========================================================================
+
+
+
+    // Mux WB
+
+    mux_wb u_mux_wb (
+
+        .alu_WB     (alu_result_WB), // 00
+
+        .lsu_WB     (lsu_rdata_WB),  // 01
+
+        .PCfour_WB  (pc_four_WB),    // 10
+
+        .i_wb_sel   (wb_sel_WB),
+
+        .o_wb_data  (wb_final_data)
+
+    );
+
+
+
+    //========================================================================
+
+    // 7. OUTPUT ASSIGNMENTS (DEBUG & CONTROL)
+
+    //========================================================================
+
+
+
+    assign o_pc_debug = pc_WB; // [FIXED] Dùng pc_WB (thường)
+
+
+
+    logic [6:0] opcode_WB;
+
+    assign opcode_WB = instr_WB[6:0];
+
+
+
+    // Định nghĩa các Opcode điều khiển
+
+    localparam OP_BRANCH = 7'b1100011; 
+
+    localparam OP_JAL    = 7'b1101111; 
+
+    localparam OP_JALR   = 7'b1100111; 
+
+
+
+    // Logic o_ctrl
+
+    assign o_ctrl = (opcode_WB == OP_BRANCH) | 
+
+                    (opcode_WB == OP_JAL)    | 
+
+                    (opcode_WB == OP_JALR);
+
+
+
+    // Instruction Valid
+
+    assign o_insn_vld = vld_WB;
+
+
+
+    assign o_mispred = pc_sel_EX; 
+
+
+
+endmodule
