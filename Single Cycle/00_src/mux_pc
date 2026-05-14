@@ -1,0 +1,60 @@
+//######################################################################
+// Module: mux_pc_logic
+// - Module MUX 2-chọn-1 (AND-OR).
+// - Đã bao gồm "decoder 1-to-2" (cổng NOT) bên trong.
+//######################################################################
+module mux_pc_logic (
+    // Inputs (Data)
+    input  logic [31:0] i_data_pc4,   // Ngõ vào 0 (từ PC+4)
+    input  logic [31:0] i_data_branch,// Ngõ vào 1 (từ ALU)
+    
+    // Input (Control)
+    input  logic        i_sel,        // Tín hiệu chọn 1-bit
+    
+    // Output
+    output logic [31:0] o_data_out
+);
+
+    // --- Decoder 1-to-2 (Logic cổng) ---
+    // Tín hiệu one-hot (w_sel_0, w_sel_1)
+    logic w_sel_0, w_sel_1;
+
+    // 1. sel_0 = (i_sel == 1'b0)
+    assign w_sel_0 = ~i_sel;
+
+    // 2. sel_1 = (i_sel == 1'b1)
+    assign w_sel_1 = i_sel;
+    
+    // --- MUX Logic (AND-OR 32-bit) ---
+    assign o_data_out = 
+        (i_data_pc4    & {32{w_sel_0}}) |
+        (i_data_branch & {32{w_sel_1}});
+
+endmodule 
+//######################################################################
+// Module: mux_pc (PC MUX Top-Level Wrapper)
+// - Module vỏ bọc, chỉ chứa 1 module con 'mux_pc_logic'.
+//######################################################################
+module mux_pc (
+    // Inputs (Data)
+    input  logic [31:0] i_pc_four,  // Từ PC+4 [cite: 39]
+    input  logic [31:0] i_alu_data, // Từ ALU [cite: 50]
+    
+    // Input (Control)
+    input  logic        i_pc_sel,   // Tín hiệu chọn từ ControlUnit 
+    
+    // Output
+    output logic [31:0] o_pc_next   // Tới thanh ghi PC 
+);
+
+    // Instantiate khối logic MUX 2-chọn-1
+    mux_pc_logic u_mux_logic (
+        .i_data_pc4    (i_pc_four),
+        .i_data_branch (i_alu_data),
+        
+        .i_sel         (i_pc_sel),
+        
+        .o_data_out    (o_pc_next)
+    );
+
+endmodule 
