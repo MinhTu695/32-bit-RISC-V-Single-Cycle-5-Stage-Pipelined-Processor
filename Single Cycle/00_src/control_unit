@@ -1,0 +1,297 @@
+//######################################################################
+
+// MODULE: CONTROL UNIT (LOGIC TỔ HỢP)
+
+// - Nhận vào 32-bit Lệnh và 2 bit cờ từ BRC.
+
+// - Tạo ra tất cả tín hiệu điều khiển dựa trên logic RISC-V.
+
+//######################################################################
+
+module control_unit (
+
+    // --- Inputs ---
+
+    input  logic [31:0] i_inst,     // Lệnh 32-bit đầy đủ
+
+    input  logic        i_BrLT,     // Tín hiệu cờ "Less Than" từ BRC
+
+    input  logic        i_BrEq,     // Tín hiệu cờ "Equal" từ BRC
+
+
+
+    // --- Outputs ---
+
+    output logic       o_pc_sel,     // 'PCSel'
+
+    output logic [2:0] o_instr_type, // 'ImmSel'
+
+    output logic       o_br_un,      // 'BrUn'
+
+    output logic       o_opa_sel,    // 'ASel' (Operand A MUX)
+
+    output logic       o_opb_sel,    // 'BSel' (Operand B MUX)
+
+    output logic [3:0] o_alu_op,     // 'ALUSel'
+
+    output logic       o_mem_wren,   // 'MemRW'
+
+    output logic       o_rd_wren,    // 'RegWEn'
+
+    output logic [1:0] o_wb_sel,     // 'WBSel'
+
+    output logic [2:0] o_mem_funct3, // funct3 cho LSU
+
+    output logic       o_insn_vld
+
+);
+
+
+
+    //============================================================
+
+    // 1. GIẢI MÃ CÁC TRƯỜNG LỆNH (TỪ 32-BIT)
+
+    //============================================================
+
+    
+
+    // Tín hiệu đầu vào từ 32-bit instruction
+
+    logic [4:0] opcode;     // instr[6:2]
+
+    logic [2:0] funct3;     // instr[14:12]
+
+    logic [6:0] funct7;     // instr[31:25]
+
+    logic       f7_5;       // instr[30]
+
+    
+
+    // Tín hiệu đầu vào từ BRC
+
+    logic       i_br_equal; // BrEq
+
+    logic       i_br_less;  // BrLT
+
+
+
+    // Gán dây (wires) từ các cổng input
+
+    assign opcode     = i_inst[6:2];
+
+    assign funct3     = i_inst[14:12];
+
+    assign funct7     = i_inst[31:25];
+
+    assign f7_5       = i_inst[30]; // bit 5 của funct7
+
+    
+
+    assign i_br_equal = i_BrEq;
+
+    assign i_br_less  = i_BrLT;
+
+
+
+// 2. BỘ GIẢI MÃ OPCODE (ĐÃ SỬA - Dựa trên 5-bit instr[6:2])
+
+    //============================================================
+
+    wire [4:0] op = opcode; // op là 5-bit
+
+
+
+    // 01100 (R-type, 7-bit là 0110011)
+
+    wire op_rtype  = (~op[4]) & ( op[3]) & ( op[2]) & (~op[1]) & (~op[0]);
+
+    
+
+    // 00100 (I-type, 7-bit là 0010011)
+
+    wire op_itype  = (~op[4]) & (~op[3]) & ( op[2]) & (~op[1]) & (~op[0]);
+
+    
+
+    // 00000 (Load, 7-bit là 0000011)
+
+    wire op_load   = (~op[4]) & (~op[3]) & (~op[2]) & (~op[1]) & (~op[0]);
+
+    
+
+    // 11011 (JAL, 7-bit là 1101111)
+
+    wire op_jal    = ( op[4]) & ( op[3]) & (~op[2]) & ( op[1]) & ( op[0]);
+
+    
+
+    // 11001 (JALR, 7-bit là 1100111)
+
+    wire op_jalr   = ( op[4]) & ( op[3]) & (~op[2]) & (~op[1]) & ( op[0]);
+
+    
+
+    // 00101 (AUIPC, 7-bit là 0010111)
+
+    wire op_auipc  = (~op[4]) & (~op[3]) & ( op[2]) & (~op[1]) & ( op[0]);
+
+    
+
+    // 01101 (LUI, 7-bit là 0110111)
+
+    wire op_lui    = (~op[4]) & ( op[3]) & ( op[2]) & (~op[1]) & ( op[0]);
+
+    
+
+    // 01000 (Store, 7-bit là 0100011)
+
+    wire op_store  = (~op[4]) & ( op[3]) & (~op[2]) & (~op[1]) & (~op[0]);
+
+    
+
+    // 11000 (Branch, 7-bit là 1100011)
+
+    wire op_branch = ( op[4]) & ( op[3]) & (~op[2]) & (~op[1]) & (~op[0]);
+
+
+
+    //============================================================
+
+    // 3. BỘ GIẢI MÃ FUNCT3
+
+    //============================================================
+
+    wire f3_000 = ~funct3[2] & ~funct3[1] & ~funct3[0];
+
+    wire f3_001 = ~funct3[2] & ~funct3[1] &  funct3[0];
+
+    wire f3_010 = ~funct3[2] &  funct3[1] & ~funct3[0];
+
+    wire f3_011 = ~funct3[2] &  funct3[1] &  funct3[0];
+
+    wire f3_100 =  funct3[2] & ~funct3[1] & ~funct3[0];
+
+    wire f3_101 =  funct3[2] & ~funct3[1] &  funct3[0];
+
+    wire f3_110 =  funct3[2] &  funct3[1] & ~funct3[0];
+
+    wire f3_111 =  funct3[2] &  funct3[1] &  funct3[0];
+
+
+
+    //============================================================
+
+    // 4. LOGIC TẠO TÍN HIỆU OUTPUT
+
+    //============================================================
+
+
+
+    // --- 4a. Logic cho o_alu_op ('ALUSel') ---
+
+    // (Logic gốc đã sửa lỗi ADDI/SUB)
+
+    wire alu_valid = op_rtype | op_itype;
+
+    wire is_sub = op_rtype & f3_000 & f7_5;
+
+    wire is_sra_srai = alu_valid & f3_101 & f7_5;
+
+    
+
+    assign o_alu_op[0] = is_sub | is_sra_srai;
+
+    assign o_alu_op[1] = alu_valid & ( f3_001 | f3_011 | f3_101 | f3_111 );
+
+    assign o_alu_op[2] = alu_valid & ( f3_010 | f3_011 | f3_110 | f3_111 );
+
+    assign o_alu_op[3] = alu_valid & ( f3_100 | f3_101 | f3_110 | f3_111 );
+
+
+
+    // --- 4b. Logic cho o_opa_sel ('ASel') ---
+
+    assign o_opa_sel = op_auipc | op_jal | op_branch;
+
+
+
+    // --- 4c. Logic cho o_opb_sel ('BSel') ---
+
+    assign o_opb_sel = op_itype | op_load | op_store | op_auipc | op_lui | op_branch | op_jal | op_jalr;
+
+
+
+    // --- 4d. Logic cho o_instr_type ('ImmSel') ---
+
+    assign o_instr_type[0] = op_itype | op_load | op_jalr | op_branch | op_jal;
+
+    assign o_instr_type[1] = op_store | op_branch;
+
+    assign o_instr_type[2] = op_lui | op_auipc | op_jal;
+
+
+
+    // --- 4e. Logic cho o_pc_sel ('PCSel') và o_br_un ('BrUn') ---
+
+    // (Dùng i_br_less và i_br_equal từ BRC)
+
+    assign o_br_un = op_branch & (f3_100 | f3_101); // 1 = Có dấu (BLT, BGE)
+
+    
+
+    wire pc_sel_branch = (f3_000 & i_br_equal) |    // BEQ
+
+                         (f3_001 & ~i_br_equal) | // BNE
+
+                         (f3_100 & i_br_less) |    // BLT
+
+                         (f3_101 & ~i_br_less) |  // BGE
+
+                         (f3_110 & i_br_less) |    // BLTU
+
+                         (f3_111 & ~i_br_less);   // BGEU
+
+                         
+
+    assign o_pc_sel = op_jal | op_jalr | (op_branch & pc_sel_branch);
+
+
+
+    // --- 4f. Logic điều khiển chính ('RegWEn', 'MemRW', 'WBSel', v.v.) ---
+
+    wire wr_rd = op_rtype | op_itype | op_load | op_jal | op_jalr | op_auipc | op_lui;
+
+    assign o_rd_wren = wr_rd;
+
+    assign o_insn_vld = wr_rd | op_store | op_branch;
+
+    
+
+    // WBSel: 00=ALU, 01=MEM, 10=PC+4
+
+    assign o_wb_sel[0] = op_load; 
+
+    assign o_wb_sel[1] = op_jal | op_jalr;
+
+    
+
+    assign o_mem_wren = op_store;
+
+    
+
+    // --- 4g. Logic cho o_mem_funct3 (Gửi funct3 tới LSU) ---
+
+    // (Theo yêu cầu thêm của bạn)
+
+    wire is_load_or_store = op_load | op_store;
+
+    assign o_mem_funct3[0] = is_load_or_store & funct3[0];
+
+    assign o_mem_funct3[1] = is_load_or_store & funct3[1];
+
+    assign o_mem_funct3[2] = is_load_or_store & funct3[2];
+
+
+
+endmodule
